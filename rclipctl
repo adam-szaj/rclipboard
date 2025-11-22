@@ -1,0 +1,246 @@
+#!/bin/bash
+# rclipctl: CLI for rclipboard HTTP API
+set -euo pipefail
+
+if [ $# -lt 1 ]; then
+  echo "usage: $0 <publish|fetch|status|topics|health> [options]" >&2
+  exit 1
+fi
+
+cmd="$1"; shift
+
+# Parse subcommand options
+args=$(getopt -o "cpset:h" -l "app:,clipboard,primary,secondary,encoded,json,help,encoding:,host:,port:,uds:,topic:" -- "$@")
+
+encoded=0
+json=0
+topic=c
+encoding=""
+mode="$cmd"
+
+# Defaults (can be overridden by env file and CLI)
+HOST=127.0.0.1
+PORT=8989
+UDS=
+
+usage()
+{
+  cat << EOS
+Subcommands:
+  publish [options]       # read stdin, publish DataItem
+  fetch [options]         # fetch last DataItem for topic
+  status [options]        # server status
+  topics [options]        # list topics
+  health [options]        # server health
+
+Common options:
+  --host <host> --port <port> | --uds <socket>
+
+Publish/Fetch options:
+  -t|--topic <topic>                            # topic (default: c)
+  -c|--clipboard | -p|--primary | -s|--secondary  # shortcuts for -t c/p/s
+  --json                                         # HTTP JSON envelope mode
+  -a|--app <app>                                 # meta.app (publish only)
+  --encoding base64|hex                          # binary encoding (publish only)
+  -e|--encoded                                   # treat stdin as already encoded
+  -h|--help
+EOS
+}
+
+# Load shared config from systemd/user env if present
+CONF_FILE=${RCLIP_CONF:-"$HOME/.config/rclipboard/env"}
+if [ -r "$CONF_FILE" ]; then
+  # shellcheck disable=SC1090
+  . "$CONF_FILE"
+  # Map rclipboard env to CLI defaults
+  if [ -n "${RCLIPBOARD_BIND_UDS:-}" ]; then UDS="$RCLIPBOARD_BIND_UDS"; fi
+  if [ -n "${RCLIPBOARD_BIND_ADDR:-}" ]; then HOST="$RCLIPBOARD_BIND_ADDR"; fi
+  if [ -n "${RCLIPBOARD_BIND_PORT:-}" ]; then PORT="$RCLIPBOARD_BIND_PORT"; fi
+fi
+
+eval set -- "$args"
+
+while true; do
+  case "$1" in
+    -t|--topic)
+      topic="$2"; shift 2 ;;
+    -c|--clipboard)
+      topic="c"; shift ;;
+    -p|--primary)
+      topic="p"; shift ;;
+    -s|--secondary)
+      topic="s"; shift ;;
+    -e|--encoded)
+      encoded=1; shift ;;
+    --json)
+      json=1; shift ;;
+    --encoding)
+      encoding=$2; shift 2 ;;
+    -a|--app)
+      app=$2; shift 2 ;;
+    --host)
+      HOST=$2; shift 2 ;;
+    --port)
+      PORT=$2; shift 2 ;;
+    --uds)
+      UDS=$2; shift 2 ;;
+    -h|--help)
+      usage; exit 0 ;;
+    --)
+      shift; break ;;
+    *)
+      break ;;
+  esac
+done
+
+# Base URL / socket opts
+if [ -n "$UDS" ]; then
+  BASE="http://localhost"
+  CURL_SOCK_OPTS=(--unix-socket "$UDS")
+else
+  BASE="http://${HOST}:${PORT}"
+  CURL_SOCK_OPTS=()
+fi
+
+if [ -z "${app:-}" ] ; then
+  app=rclipctl
+fi
+
+# ---------- HTTP helpers ----------
+
+endpoint_url()
+{
+  local path="$1"
+  if [ "$json" = "1" ]; then
+    echo "${BASE}${path}?response-type=json"
+  else
+    echo "${BASE}${path}"
+  fi
+}
+
+# ---------- Endpoint: publish ----------
+
+make_publish_body()
+{
+  enc=${encoding}
+  if [ -z "${enc}" ] ; then enc="base64"; fi
+  local encode_cmd='cat'
+  if [ "$enc" = "base64" ]; then
+    encode_cmd='base64 -w 0 -'
+  elif [ "$enc" = "hex" ]; then
+    encode_cmd='xxd -p -c 9999'
+  fi
+  if [ "$encoded" = "1" ]; then
+    encode_cmd='cat'
+  fi
+  value=$(bash -c "${encode_cmd}")
+  cat << EOF
+{
+  "meta": {"app": "${app}"},
+  "data": {
+    "topic": "${topic}",
+    "value": "${value}",
+    "valueType": "binary",
+    "valueEncoding": "${enc}"
+  }
+}
+EOF
+}
+
+call_publish()
+{
+  local url
+  url=$(endpoint_url "/publish/${topic}")
+  body=$(make_publish_body)
+  echo "$body" | jq -c | curl "${CURL_SOCK_OPTS[@]}" -fsS \
+    -X POST "$url" \
+    -H 'Content-Type: application/json' \
+    --data-binary @- | { if [ "$json" = "1" ]; then jq -c; else cat >/dev/null; fi; }
+}
+
+# ---------- Endpoint: fetch ----------
+
+encode()
+{
+  local codec="$1"
+  case ${codec} in
+    "null") cat ;;
+    "base64") base64 -w 0 ;;
+    "hex") xxd -p -c 9999 ;;
+  esac
+}
+
+decode()
+{
+  local codec=$1
+  case ${codec} in
+    "null") cat ;;
+    "base64") base64 -d - ;;
+    "hex") xxd -r -p ;;
+  esac
+}
+
+call_fetch()
+{
+  local url
+  if [ "$json" = "1" ]; then
+    url=$(endpoint_url "/fetch/${topic}")
+    curl "${CURL_SOCK_OPTS[@]}" -fsS "$url" | jq -c
+    return
+  fi
+
+  # Non-JSON mode: fetch envelope internally, print value
+  url="${BASE}/fetch/${topic}?response-type=json"
+  resp=$(curl "${CURL_SOCK_OPTS[@]}" -fsS "$url")
+  vtype=$(printf '%s' "$resp" | jq -r '.value.valueType // empty')
+  venc=$(printf '%s' "$resp" | jq -r '.value.valueEncoding // empty')
+  if [ "$vtype" != "binary" ]; then
+    printf '%s' "$resp" | jq -r '(.value.value | if type=="string" then . else @json end)'
+    return
+  else
+    val=$(printf '%s' "$resp" | jq -r '.value.value // empty')
+    if [ -n "${encoding}" ] ; then encoded=1; fi
+    if [ "${encoded}" = 1 ] ; then
+      if [ -z "${encoding}" ] ; then encoding=base64; fi
+    else
+      encoding=null
+    fi
+    target=${encoding}
+    printf '%s' "$val" | decode $venc  | encode $target
+    return
+  fi
+  echo "unsupported encoding conversion: $venc -> $target" >&2
+  exit 3
+}
+
+# ---------- Endpoint: status ----------
+
+call_status()
+{
+  curl "${CURL_SOCK_OPTS[@]}" -fsS "${BASE}/status" | jq -c
+}
+
+# ---------- Endpoint: topics ----------
+
+call_topics()
+{
+  curl "${CURL_SOCK_OPTS[@]}" -fsS "${BASE}/topics" | jq -c
+}
+
+# ---------- Endpoint: health ----------
+
+call_health()
+{
+  curl "${CURL_SOCK_OPTS[@]}" -fsS "${BASE}/health" | jq -c
+}
+
+# ---------- Dispatch ----------
+
+case "$mode" in
+  publish) call_publish ;;
+  fetch)   call_fetch ;;
+  status)  call_status ;;
+  topics)  call_topics ;;
+  health)  call_health ;;
+  *) echo "unknown subcommand: $mode" >&2; usage; exit 2 ;;
+esac

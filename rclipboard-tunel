@@ -1,0 +1,132 @@
+#!/bin/bash
+
+
+TEMP=$(getopt -o "ldgptTxXf:r:P:h" -l "login,daemonize,get,push,remote-addr:,remote-port:,help" -- "$@")
+usage()
+{
+    cat << EOF
+
+rclipboard-tunel -d|--deamonize -l|--login -t -T -x -X -r|--remote-addr <remote-addr> -P|--remote-port <remote-port> -h|--help
+    -d|--daemonize      deamonize process
+    -t                  <local-server>  =>  <remote-proxy>
+    -T                  <local-proxy>   =>  <remote-server>
+    -x                  <local-server>  =>  <remote-server>
+    -X                  <local-proxy>   =>  <remote-proxy>
+    -r|--remote-addr <ipaddr>
+    -P|--remote-port <port>
+
+EOF
+    exit 0
+}
+
+if [ $? != 0 ] ; then echo "Terminating..." >&2 ; exit 1 ; fi
+eval set -- "$TEMP"
+
+demonize=0
+get=0
+post=0
+remote_addr=
+remote_port=22
+tunel=0
+service_port=8787
+proxy_port=8788
+RSSH_OPTIONS=()
+OTEMP=()
+ssh_opts=()
+login=0
+while true; do
+    # OTEMP+=("${1}")
+    # echo "arg: ${1}"
+    case "$1" in
+        -l|--login)
+            login=1
+            OTEMP+=("${1}")
+            shift
+            ;;
+        -g|--get)
+            get=1 ;
+            OTEMP+=("${1}")
+            shift
+            ;;
+        -p|--push)
+            post=1 ;
+            OTEMP+=("${1}")
+            shift
+            ;;
+        -r|--remote-addr)
+            remote_addr="${2}"
+            OTEMP+=("${1}" "${2}")
+            shift 2
+            ;;
+        -P|--remote-port)
+            remote_port="${2}"
+            OTEMP+=("${1}" "${2}")
+            shift 2
+            ;;
+        -d|--daemonize)
+            demonize=1
+            shift
+            ;;
+        -t|-T|-x|-X)
+            case "$1" in
+                -t)
+                    tunel=01
+                    tunel_rport=${proxy_port}
+                    tunel_lport=${service_port}
+                    ;;
+                -T)
+                    tunel=10
+                    tunel_rport=${service_port}
+                    tunel_lport=${proxy_port}
+                    ;;
+                -x)
+                    tunel=00
+                    tunel_rport=${service_port}
+                    tunel_lport=${service_port}
+                    ;;
+                -X)
+                    tunel=11
+                    tunel_rport=${proxy_port}
+                    tunel_lport=${proxy_port}
+                    ;;
+            esac
+            shift
+            ;;
+        -h|--help)
+            usage
+            exit 0
+            ;;
+        "--")
+            OTEMP+=(${@})
+            opts=(${@})
+            RSSH_OPTIONS+=(${opts[@]:1})
+            break ;;
+        *)
+            RSSH_OPTIONS+=("$1")
+            shift
+            ;;
+    esac
+done
+
+if [[ "${login}" = "0" ]] ; then
+    ssh_opts+=(-N)
+fi
+
+if [[ "${demonize}" = "1" ]] ; then
+    echo "demonize: ${OTEMP[@]}"
+    $0 ${OTEMP[@]} &>/dev/null &
+else
+    if [[ $get = "1" ]] ; then
+        command='socat TCP-LISTEN:6000,fork EXEC:"paste-clipboard"'
+        echo "get: ${command}"
+        exec $command
+    elif [[ $post = "1" ]] ; then
+        command='socat TCP-LISTEN:6001,fork EXEC:"clip"'
+        echo "post: ${command}"
+        exec $command
+    elif [[ $tunel != "0" ]] ; then
+        command=(ssh ${ssh_opts[*]} -R "${tunel_rport}:127.0.0.1:${tunel_lport}" -P "${remote_port}" ${RSSH_OPTIONS[@]} ${remote_addr})
+        echo "command: ${command[@]}"
+        exec ${command[@]}
+    fi
+fi

@@ -1,0 +1,13 @@
+[Unit]
+Description=rclipboard (socket-activated)
+Requires=rclipboard.socket
+After=rclipboard.socket
+
+[Service]
+Type=simple
+EnvironmentFile=%h/.config/rclipboard/env
+WorkingDirectory=%h/rclipboard-py
+ExecStart=/usr/bin/python3 -m uvicorn app.main:app --fd 3
+Restart=on-failure
+RestartSec=1s
+

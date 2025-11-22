@@ -1,0 +1,93 @@
+# message format outline
+
+ClientToServerMessage:
+  type:
+    system-request:
+      id:
+      action:
+        - subscribe:
+            topics:
+        - unsubscribe:
+            topics:
+        - ping:
+    request:
+      id:
+      action:
+        - call:
+            method:
+            meta:
+            params:
+    event:
+      event:
+      data:
+
+ServerToClientMessage:
+  type:
+    system-response:
+      event:
+        - subscribed:
+            id:
+            topics:
+        - unsubscribed:
+            id:
+            topics:
+        - pong:
+            id:
+    response:
+      event:
+        return:
+          id:
+          method:
+          value:
+        error:
+          id:
+          method:
+          error:
+    broadcast:
+      action:
+        - publish:
+            # data MAY be a single DataItem OR a list of DataItem
+            # single object form:
+            data:
+              topic:
+              value:
+              # valueType is optional for JSON‑typed values; REQUIRED when valueType == "binary"
+              valueType:
+              # when valueType == "binary", valueEncoding is REQUIRED; allowed: base64 | hex
+              valueEncoding:
+            # list form (conceptual):
+            # data:
+            #   - topic:
+            #     value:
+            #     valueType: (optional; REQUIRED if binary)
+            #     valueEncoding: (REQUIRED if valueType == binary)
+            meta:
+              app:
+              host:
+        - close:
+        - restart:
+
+CommonMessage:
+  id:
+  ts:
+
+# HTTP mapping
+# - If URL contains ?response-type=json, HTTP returns the same envelopes
+#   as WS (response/system-response) including id and ts.
+# - Otherwise: success -> HTTP status only with empty body; error -> text body.
+
+# DataItem (common)
+# Reusable description for elements in publish.data (single or list)
+DataItem:
+  topic:
+  value:
+  # Optional, inferred from JSON unless binary
+  valueType: # one of: string | number | boolean | object | array | binary
+  # REQUIRED when valueType == binary
+  valueEncoding: # one of: base64 | hex
+  #   - hex: lowercase hex, no separators, no 0x prefix
+  #   - base64: standard RFC 4648 alphabet (with padding)
+
+# Notes
+# - response.return may include optional valueType/valueEncoding alongside value when returning binary data.
+# - For binary over HTTP and WS, producers MUST follow the encoding constraints above; consumers MUST validate.

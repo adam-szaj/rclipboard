@@ -1,0 +1,16 @@
+[Unit]
+Description=rclipboard service (user, proxy mode)
+After=default.target
+
+[Service]
+Type=simple
+EnvironmentFile=%h/.config/rclipboard/env
+WorkingDirectory=%h/rclipboard-py
+Environment=RCLIPBOARD_PROXY=1
+ExecStart=/usr/bin/python3 -m uvicorn app.main:app --host ${RCLIPBOARD_BIND_ADDR} --port ${RCLIPBOARD_BIND_PORT}
+Restart=on-failure
+RestartSec=1s
+
+[Install]
+WantedBy=default.target
+

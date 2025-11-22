@@ -1,0 +1,34 @@
+#!/bin/bash
+set -euo pipefail
+
+THIS_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+topic="c"
+args=$(getopt -o "hcpst:" -l "help,topic:" -- "$@")
+
+usage()
+{
+    cat << EOF
+Usage:
+    $0 [-t <topic>|-c|-p|-s] [--help]
+EOF
+}
+
+eval set -- "$args"
+while true; do
+    case "$1" in
+        -t|--topic) topic="$2"; shift 2 ;;
+        -c) topic="c" ; shift ;;
+        -p) topic="p" ; shift ;;
+        -s) topic="s" ; shift ;;
+        -h|--help)
+            usage
+            shift
+            exit ;;
+        --) shift; break ;;
+        *) break ;;
+    esac
+done
+
+exec "$THIS_DIR/rclipctl" publish -t "$topic" "$@"
+
