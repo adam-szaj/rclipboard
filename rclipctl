@@ -149,9 +149,8 @@ EOF
 
 call_publish()
 {
-  local url
-  url=$(endpoint_url "/publish/${topic}")
-  body=$(make_publish_body)
+  local url=$(endpoint_url "/publish/${topic}")
+  local body=$(make_publish_body)
   echo "$body" | jq -c | curl "${CURL_SOCK_OPTS[@]}" -fsS \
     -X POST "$url" \
     -H 'Content-Type: application/json' \

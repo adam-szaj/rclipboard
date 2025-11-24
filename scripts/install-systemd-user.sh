@@ -22,7 +22,7 @@ if [ ! -f "$ENV_DIR/env" ]; then
   echo "Created $ENV_DIR/env (edit as needed)."
 fi
 
-mkdir -p "$UNIT_DIR/rclipboard.service.d" "$UNIT_DIR/rclipboard@.service.d" "$UNIT_DIR/rclipboard-proxy.service.d"
+mkdir -p "$UNIT_DIR/rclipboard.service.d" "$UNIT_DIR/rclipboard@.service.d" "$UNIT_DIR/rclipboard-proxy.service.d" "$UNIT_DIR/rclipboard.socket.d"
 cat >"$UNIT_DIR/rclipboard.service.d/override.conf" <<EOF
 [Service]
 WorkingDirectory=$REPO_DIR
@@ -35,10 +35,14 @@ cat >"$UNIT_DIR/rclipboard-proxy.service.d/override.conf" <<EOF
 [Service]
 WorkingDirectory=$REPO_DIR
 EOF
+cat >"$UNIT_DIR/rclipboard.socket.d/override.conf" <<'EOF'
+[Socket]
+# Use the socket-activated template with an explicit instance name.
+Service=rclipboard@uds.service
+EOF
 
 systemctl --user daemon-reload
 echo "Installed user units. Enable with:"
 echo "  systemctl --user enable --now rclipboard.service"
 echo "or socket-activated:"
 echo "  systemctl --user enable --now rclipboard.socket"
-

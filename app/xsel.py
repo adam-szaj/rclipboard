@@ -198,7 +198,7 @@ async def poller(app: FastAPI):
                 current = await read_selection(opt, timeout=0.5)
                 last_applied = app.state.xsel_last_applied.get(opt)
                 last_seen = app.state.xsel_last_seen.get(opt)
-                if current == last_seen:
+                if not current or current == last_seen:
                     continue
                 else:
                     # print(f"current is not the same as the last one")
