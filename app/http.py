@@ -4,7 +4,7 @@ from typing import Any
 
 from fastapi import Body, FastAPI, HTTPException, Query
 from fastapi.responses import JSONResponse, PlainTextResponse, Response
-
+from .main import qput, qget
 from messages import (
     makeResponse,
     makeResponseError,
@@ -12,6 +12,22 @@ from messages import (
     normalize_data_items,
 )
 from . import xsel as xsel_mod
+from .log import get_logger
+
+def error(*args):
+    get_logger(__name__).error(*args)
+
+def warning(*args):
+    get_logger(__name__).warning(*args)
+
+def info(*args):
+    get_logger(__name__).info(*args)
+
+def debug(*args):
+    get_logger(__name__).debug(*args)
+
+def trace(*args):
+    get_logger(__name__).trace(*args)
 
 
 def _json_mode(response_type: str | None) -> bool:
@@ -54,13 +70,13 @@ async def fetch(
     if content is None:
         if json_mode:
             req = {"id": id or next_id(), "method": "get"}
-            return JSONResponse(makeResponseError(
-                req, {"message": f"topic '{topic}' not found"}),
-                                status_code=404)
-        return PlainTextResponse(f"topic '{topic}' not found", status_code=404)
+            info(f"!!!! fetch: {req}")
+            return JSONResponse(makeResponse(req, value=None))
+        return Response(status_code=200)
 
     if json_mode:
         req = {"id": id or next_id(), "method": "get"}
+        info(f"!!! fetch: {req}")
         return JSONResponse(makeResponse(req, value=content))
     return Response(status_code=200)
 
@@ -77,6 +93,7 @@ async def publish(
     try:
         data_items = normalize_data_items(body.get("data"),
                                           topic_fallback=topic)
+        info(f"data_items: {data_items}")
     except Exception as e:  # noqa: BLE001
         if json_mode:
             req = {"id": pid, "method": "publish"}
@@ -85,8 +102,8 @@ async def publish(
         return PlainTextResponse(str(e), status_code=400)
 
     data = {"source": None, "meta": meta, "data_items": data_items}
-    # print(f"got publish: {data}")
-    await app.state.bus.put(data)
+    print(f"got publish put data: {data}")
+    await qput(app, data)
     if json_mode:
         req = {"id": pid, "method": "publish"}
         return JSONResponse(

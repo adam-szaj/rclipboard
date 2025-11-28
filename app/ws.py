@@ -5,6 +5,7 @@ from typing import Any
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from .log import get_logger
+from .main import qget
 
 from messages import (
     makeResponse,
@@ -16,6 +17,22 @@ from messages import (
 from . import xsel as xsel_mod
 from . import proxy as proxy_mod
 
+from .log import get_logger
+
+def error(*args):
+    get_logger(__name__).error(*args)
+
+def warning(*args):
+    get_logger(__name__).warning(*args)
+
+def info(*args):
+    get_logger(__name__).info(*args)
+
+def debug(*args):
+    get_logger(__name__).debug(*args)
+
+def trace(*args):
+    get_logger(__name__).trace(*args)
 
 class Connection:
     def __init__(self, app: FastAPI, ws: WebSocket):
@@ -31,42 +48,48 @@ class Connection:
 async def dispatcher(app: FastAPI):
     bus: a.Queue = app.state.bus
     while True:
-        item = await bus.get()
+        item = await qget(app)
+        info(f"item from bus: {item}")
         meta = item.get("meta", {})
         data_items = item.get("data_items", [])
         source = item.get("source")
 
         # Update content store and fan-out
         for di in data_items:
+
+            info(f"di: {di}")
             topic = di.get("topic")
             if not topic:
+                info(f"not topic continue")
                 continue
             app.state.topic_content[topic] = {**di}
             subs = app.state.subs.get(topic, set())
+            info(f"subs: {subs}")
             if subs:
                 payload = make_broadcast_publish(di, meta=meta)
+                info(f"payload: {payload}")
                 for conn in list(subs):
                     if source is not None and conn is source:
                         continue
                     try:
                         conn.q.put_nowait(payload)
                     except a.QueueFull:
-                        get_logger(__name__).trace("ws client queue full; dropping oldest")
+                        trace("ws client queue full; dropping oldest")
                         try:
                             conn.q.get_nowait()
                         except a.QueueEmpty:
-                            get_logger(__name__).trace("ws client queue empty while dropping oldest")
+                            trace("ws client queue empty while dropping oldest")
                         await conn.q.put(payload)
         # Also sync xsel and proxy for topics processed
         try:
             for di in data_items:
                 await xsel_mod.on_topic_update(app, di)
         except Exception as e:
-            get_logger(__name__).debug(f"xsel sync error: {e}", exc_info=True)
+            debug(f"xsel sync error: {e}", exc_info=True)
         try:
             await proxy_mod.on_local_publish(app, data_items, meta, item.get("source"))
         except Exception as e:
-            get_logger(__name__).debug(f"proxy forward error: {e}", exc_info=True)
+            debug(f"proxy forward error: {e}", exc_info=True)
         bus.task_done()
 
 

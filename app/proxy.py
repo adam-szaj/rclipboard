@@ -8,10 +8,26 @@ from typing import Any
 from fastapi import FastAPI
 from websockets.asyncio.client import connect
 from .log import get_logger
+from .main import qput, qget
 
 from messages import makeMessage, next_id
 
 DEFAULT_TOPICS = ["c", "p", "s"]
+
+def error(*args):
+    get_logger(__name__).error(*args)
+
+def warning(*args):
+    get_logger(__name__).warning(*args)
+
+def info(*args):
+    get_logger(__name__).info(*args)
+
+def debug(*args):
+    get_logger(__name__).debug(*args)
+
+def trace(*args):
+    get_logger(__name__).trace(*args)
 
 
 class ProxyClient:
@@ -40,6 +56,7 @@ class ProxyClient:
 
     async def send_publish(self, items: list[dict], meta: dict | None = None):
         if not self.connected:
+            warning("send publish: not connected")
             return
         payload = {
             "type": "request",
@@ -51,38 +68,45 @@ class ProxyClient:
             },
             "meta": meta or {},
         }
+        info(f"sending: {payload}")
         await self._send_json(payload)
 
     async def run(self):
         while True:
             try:
+                info(f"trying to connect to: {self.url}")
                 async with connect(self.url) as ws:
+                    info("connected to {self.url}: {ws}")
                     self.ws = ws
                     self.connected = True
                     await self._subscribe()
                     async for raw in ws:
+                        info(f"raw: {raw}")
                         if isinstance(raw, bytes):
                             continue
                         try:
                             msg = json.loads(raw)
+                            info(f"msg: {msg}")
                         except Exception:
-                            get_logger(__name__).trace("proxy: failed to decode JSON from upstream")
+                            error("proxy: failed to decode JSON from upstream")
                             continue
                         # Expect upstream broadcasts
                         if msg.get("type") == "broadcast" and msg.get(
                                 "action") == "publish":
                             data = msg.get("data")
                             items = data if isinstance(data, list) else [data]
-                            await self.app.state.bus.put({
+                            adata = {
                                 "source":
                                 "proxy_upstream",
                                 "meta":
                                 msg.get("meta", {}),
                                 "data_items":
                                 items
-                            })
+                            }
+                            info("proxy put data: {adata}")
+                            await qput(self.app, adata)
             except Exception as e:
-                get_logger(__name__).debug(f"proxy upstream error: {e}", exc_info=True)
+                error(f"proxy upstream error: {e}", exc_info=True)
                 self.connected = False
                 await a.sleep(1.0)
 
@@ -100,6 +124,7 @@ def _make_ws_url() -> str | None:
 
 def install_proxy(app: FastAPI) -> None:
     enabled = os.environ.get("RCLIPBOARD_PROXY", "0") in ("1", "true", "True")
+    info(f"ENV: RCLIPBOARD_PROXY: {enabled}\nENV:\n{os.environ}")
     app.state.proxy_enabled = enabled
     app.state.proxy_task = None
     app.state.proxy_client: ProxyClient | None = None
@@ -107,7 +132,7 @@ def install_proxy(app: FastAPI) -> None:
         return
     url = _make_ws_url()
     if not url:
-        get_logger(__name__).debug("proxy disabled: invalid upstream configuration")
+        warning("proxy disabled: invalid upstream configuration")
         return
     client = ProxyClient(app, url=url)
     app.state.proxy_client = client
@@ -120,14 +145,19 @@ async def on_local_publish(app: FastAPI, data_items: list[dict], meta: dict,
     Forward local publishes upstream when proxy is enabled,
     excluding upstream-originated ones.
     """
+    info(f"on_local_publish:   {data_items}")
     if not getattr(app.state, "proxy_enabled", False):
+        info("not proxy_enabled")
         return
     if source == "proxy_upstream":
+        info(f"source: {source} == proxy_upstream")
         return
     client: ProxyClient | None = getattr(app.state, "proxy_client", None)
     if not client or not client.connected:
+        info(f"not {client} or not {client.connected}")
         return
     try:
+        info("send_publish: {data_items}")
         await client.send_publish(data_items, meta=meta)
     except Exception as e:
-        get_logger(__name__).debug(f"proxy forward error: {e}", exc_info=True)
+        debug(f"proxy forward error: {e}", exc_info=True)
