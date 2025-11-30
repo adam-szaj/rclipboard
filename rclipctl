@@ -112,7 +112,7 @@ endpoint_url()
 {
   local path="$1"
   if [ "$json" = "1" ]; then
-    echo "${BASE}${path}?response-type=json"
+    echo "${BASE}${path}?json=1"
   else
     echo "${BASE}${path}"
   fi
@@ -190,7 +190,7 @@ call_fetch()
   fi
 
   # Non-JSON mode: fetch envelope internally, print value
-  url="${BASE}/fetch/${topic}?response-type=json"
+  url="${BASE}/fetch/${topic}?json=1"
   resp=$(curl "${CURL_SOCK_OPTS[@]}" -fsS "$url")
   vtype=$(printf '%s' "$resp" | jq -r '.value.valueType // empty')
   venc=$(printf '%s' "$resp" | jq -r '.value.valueEncoding // empty')

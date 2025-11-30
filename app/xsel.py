@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import asyncio as a
-from asyncio.timeouts import timeout
 import base64
 import os
 from typing import Any
 import shutil
+import json
+# from asyncio.timeouts import timeout
 
 from fastapi import FastAPI
 from .log import get_logger
@@ -34,7 +35,7 @@ def _b64_decode(s: str) -> bytes:
 
 async def _exec(*args: str,
                 input_data: bytes | None = None,
-                timeout: float = 2.0) -> tuple[int, bytes, bytes]:
+                timeout: float = 5.0) -> tuple[int, bytes, bytes]:
     """Run a process with optional stdin and a timeout.
 
     xsel -i may remain alive to own the selection on some setups; we therefore
@@ -61,7 +62,7 @@ async def _exec(*args: str,
                 proc.communicate(input=input_data), timeout=timeout)
         return proc.returncode, stdout or b"", stderr or b""
     except a.TimeoutError:
-        get_logger(__name__).debug(f"xsel exec timeout: args={args}")
+        # get_logger(__name__).debug(f"xsel exec timeout: args={args}")
         try:
             proc.terminate()
             await a.wait_for(proc.wait(), timeout=0.5)
@@ -172,12 +173,11 @@ async def poller(app: FastAPI):
                     if isinstance(value, str):
                         data_bytes = value.encode()
                     else:
-                        import json
 
                         data_bytes = json.dumps(value,
                                                 separators=(",",
                                                             ":")).encode()
-                await write_selection(opt, data_bytes, timeout=0.5)
+                await write_selection(opt, data_bytes, timeout=2.5)
                 # remember last applied and seen
                 ts = utcTimestamp()
                 app.state.xsel_last_applied[opt] = data_bytes
@@ -195,7 +195,7 @@ async def poller(app: FastAPI):
         try:
             app.state.xsel_last_poll_ts = utcTimestamp()
             for topic, opt in TOPIC_TO_XSEL.items():
-                current = await read_selection(opt, timeout=0.5)
+                current = await read_selection(opt, timeout=1)
                 last_applied = app.state.xsel_last_applied.get(opt)
                 last_seen = app.state.xsel_last_seen.get(opt)
                 if current == last_seen:
@@ -216,7 +216,7 @@ async def poller(app: FastAPI):
                     "valueEncoding": "base64",
                 }
                 # print(f"poller di2: {di2}")
-                await app.state.bus.put({
+                await app.state.main.bus.put({
                     "source": None,
                     "meta": {
                         "app": "xsel"

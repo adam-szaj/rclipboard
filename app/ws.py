@@ -1,4 +1,5 @@
 from __future__ import annotations
+from .app_state import enqueue_topic_data
 
 import asyncio as a
 from typing import Any
@@ -16,9 +17,21 @@ from messages import (
 from . import xsel as xsel_mod
 from . import proxy as proxy_mod
 
+from .log import get_logger
 
-class Connection:
+logger = get_logger(__name__)
+error = logger.error
+warning = logger.warning
+info = logger.info
+debug = logger.debug
+trace = logger.trace
+from .app_state import Connection
+
+
+class WSConnection(Connection):
+
     def __init__(self, app: FastAPI, ws: WebSocket):
+        info(f"new connection app: {app}")
         self.app = app
         self.ws = ws
         self.q: a.Queue = a.Queue()
@@ -26,48 +39,6 @@ class Connection:
 
     async def send(self, payload: dict):
         await self.ws.send_json(payload)
-
-
-async def dispatcher(app: FastAPI):
-    bus: a.Queue = app.state.bus
-    while True:
-        item = await bus.get()
-        meta = item.get("meta", {})
-        data_items = item.get("data_items", [])
-        source = item.get("source")
-
-        # Update content store and fan-out
-        for di in data_items:
-            topic = di.get("topic")
-            if not topic:
-                continue
-            app.state.topic_content[topic] = {**di}
-            subs = app.state.subs.get(topic, set())
-            if subs:
-                payload = make_broadcast_publish(di, meta=meta)
-                for conn in list(subs):
-                    if source is not None and conn is source:
-                        continue
-                    try:
-                        conn.q.put_nowait(payload)
-                    except a.QueueFull:
-                        get_logger(__name__).trace("ws client queue full; dropping oldest")
-                        try:
-                            conn.q.get_nowait()
-                        except a.QueueEmpty:
-                            get_logger(__name__).trace("ws client queue empty while dropping oldest")
-                        await conn.q.put(payload)
-        # Also sync xsel and proxy for topics processed
-        try:
-            for di in data_items:
-                await xsel_mod.on_topic_update(app, di)
-        except Exception as e:
-            get_logger(__name__).debug(f"xsel sync error: {e}", exc_info=True)
-        try:
-            await proxy_mod.on_local_publish(app, data_items, meta, item.get("source"))
-        except Exception as e:
-            get_logger(__name__).debug(f"proxy forward error: {e}", exc_info=True)
-        bus.task_done()
 
 
 def _subscribe(app: FastAPI, conn: Connection, topics: list[str]) -> list[str]:
@@ -82,7 +53,8 @@ def _subscribe(app: FastAPI, conn: Connection, topics: list[str]) -> list[str]:
     return added
 
 
-def _unsubscribe(app: FastAPI, conn: Connection, topics: list[str]) -> list[str]:
+def _unsubscribe(app: FastAPI, conn: Connection,
+                 topics: list[str]) -> list[str]:
     removed: list[str] = []
     for t in list(topics):
         subs = app.state.subs.get(t)
@@ -115,28 +87,35 @@ async def _handler(app: FastAPI, conn: Connection, msg: dict) -> dict | None:
         if action == "unsubscribe":
             topics = msg.get("topics", [])
             removed = _unsubscribe(app, conn, topics)
-            return makeSystemResponse(msg, event="unsubscribed", topics=removed)
+            return makeSystemResponse(msg,
+                                      event="unsubscribed",
+                                      topics=removed)
         if action == "ping":
             return makeSystemResponse(msg, event="pong")
-        return makeResponseError(msg, {"message": f"unknown system action: {action}"})
+        return makeResponseError(
+            msg, {"message": f"unknown system action: {action}"})
 
     if mtype == "request" and msg.get("action") == "call":
         method = msg.get("method")
+
         if method == "publish":
             meta = msg.get("meta", {})
             try:
                 items = normalize_data_items(msg.get("params", {}).get("data"))
             except Exception as e:  # noqa: BLE001
                 return makeResponseError(msg, {"message": str(e)})
-            await app.state.bus.put({"source": conn, "meta": meta, "data_items": items})
+            data = {"source": conn, "meta": meta, "data_items": items}
+            await enqueue_topic_data(app, data)
             return makeResponse(msg, value={"published": len(items)})
         if method == "get":
             topic = msg.get("params", {}).get("topic")
             if not topic:
-                return makeResponseError(msg, {"message": "params.topic is required"})
+                return makeResponseError(
+                    msg, {"message": "params.topic is required"})
             value = app.state.topic_content.get(topic)
             if value is None:
-                return makeResponseError(msg, {"message": f"topic '{topic}' not found"})
+                return makeResponseError(
+                    msg, {"message": f"topic '{topic}' not found"})
             return makeResponse(msg, value=value)
         return makeResponseError(msg, {"message": f"unknown method: {method}"})
 
@@ -145,14 +124,16 @@ async def _handler(app: FastAPI, conn: Connection, msg: dict) -> dict | None:
         # Could be logged/forwarded if needed
         return None
 
-    return makeResponseError(msg, {"message": f"unknown message type: {mtype}"})
+    return makeResponseError(msg,
+                             {"message": f"unknown message type: {mtype}"})
 
 
 def install_ws(app: FastAPI) -> None:
+
     @app.websocket("/ws")
     async def ws_endpoint(ws: WebSocket):
         await ws.accept()
-        conn = Connection(app, ws)
+        conn = WSConnection(app, ws)
         worker = a.create_task(_worker(conn))
         try:
             while True:

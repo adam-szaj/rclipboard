@@ -14,7 +14,7 @@ import itertools
 import re
 
 
-def makeMessage(**kwargs) -> dict:
+def makeMessage(**kwargs) -> dict[str, object]:
     """Create a generic message dict from keyword arguments."""
     return kwargs
 
@@ -114,7 +114,7 @@ def normalize_data_items(obj: Any,
 
 def make_broadcast_publish(data: dict | list[dict],
                            meta: dict | None = None,
-                           ts: Any = None) -> dict:
+                           ts: Any = None) -> dict[str, object]:
     """Create a broadcast/publish envelope with DataItem(s)."""
     return makeMessage(
         type="broadcast",

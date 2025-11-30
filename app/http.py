@@ -1,21 +1,33 @@
 from __future__ import annotations
 
+from .log import get_logger
+from .app_state import enqueue_topic_data, enqueue_request_topic, enqueue_request_topics
+
 from typing import Any
 
-from fastapi import Body, FastAPI, HTTPException, Query
+from fastapi import Body, FastAPI, Query
 from fastapi.responses import JSONResponse, PlainTextResponse, Response
-
 from messages import (
+    utcTimestamp,
     makeResponse,
     makeResponseError,
     next_id,
     normalize_data_items,
 )
-from . import xsel as xsel_mod
+
+from logging import Logger
+from .log import get_logger
+
+logger: Logger = get_logger(__name__)
+error = logger.error
+warning = logger.warning
+info = logger.info
+debug = logger.debug
+trace = logger.debug
 
 
-def _json_mode(response_type: str | None) -> bool:
-    return response_type == "json"
+def _json_mode(json: str | None) -> bool:
+    return json == "json"
 
 
 async def status(app: FastAPI) -> dict[str, Any]:
@@ -40,17 +52,19 @@ async def status(app: FastAPI) -> dict[str, Any]:
 
 
 async def topics(app: FastAPI) -> dict[str, Any]:
-    return {"topics": sorted(app.state.subs.keys())}
+    return {"topics": sorted(await enqueue_request_topics(app))}
 
 
 async def fetch(
     app: FastAPI,
     topic: str,
-    response_type: str | None,
+    json: str | None,
     id: int | None,
 ):
-    json_mode = _json_mode(response_type)
-    content = app.state.topic_content.get(topic)
+    json_mode = _json_mode(json)
+    info("before enqueue_request_topic")
+    content = await enqueue_request_topic(app, topic)
+    info(f"after enqueue_request_topic: {content}")
     if content is None:
         if json_mode:
             req = {"id": id or next_id(), "method": "get"}
@@ -68,10 +82,11 @@ async def fetch(
 async def publish(
         app: FastAPI,
         topic: str,
+        source: object,
         body: dict = Body(...),
-        response_type: str | None = None,
+        json: str | None = None,
 ):
-    json_mode = _json_mode(response_type)
+    json_mode = _json_mode(json)
     pid = body.get("id") or next_id()
     meta = body.get("meta", {})
     try:
@@ -86,7 +101,7 @@ async def publish(
 
     data = {"source": None, "meta": meta, "data_items": data_items}
     # print(f"got publish: {data}")
-    await app.state.bus.put(data)
+    await enqueue_topic_data(app, data)
     if json_mode:
         req = {"id": pid, "method": "publish"}
         return JSONResponse(
@@ -119,15 +134,20 @@ def install_http_handlers(app: FastAPI) -> None:
     @app.get("/fetch/{topic}")
     async def _fetch(
         topic: str,
-        response_type: str | None = Query(default=None, alias="response-type"),
+        json: bool | None = Query(default=True, alias="json"),
         id: int | None = None,
     ):
-        return await fetch(app, topic, response_type, id)
+        info(f"calling fetch")
+        return await fetch(app, topic, json, id)
 
     @app.post("/publish/{topic}")
     async def _publish(
-        topic: str,
-        body: dict = Body(...),
-        response_type: str | None = Query(default=None, alias="response-type"),
+            topic: str,
+            body: dict = Body(...),
+            json: bool | None = Query(default=True, alias="json"),
     ):
-        return await publish(app, topic, body, response_type)
+        info(f"body: {body}")
+        source = "http"
+        body["ts"] = utcTimestamp()
+        info(f"body: {body}")
+        return await publish(app, topic, source, body, json)

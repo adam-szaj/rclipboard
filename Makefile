@@ -3,15 +3,17 @@ SHELL := /bin/bash
 # Configuration
 HOST ?= 127.0.0.1
 PORT ?= 8989
-UDS  ?= /tmp/rclip.sock
+UDS  ?= $(XDG_RUNTIME_DIR)/rclipboard.sock
 KEY  ?= key.pem
 CERT ?= cert.pem
-LOG_LEVEL ?= info
+LOG_LEVEL ?= debug
 
 # Proxy upstream config
 UPSTREAM_HOST ?= 127.0.0.1
 UPSTREAM_PORT ?= 8989
-UPSTREAM_UDS  ?=
+UPSTREAM_UDS  ?= $(XDG_RUNTIME_DIR)/rclipboard.sock
+RCLIPBOARD_LOG_LEVEL := $(LOG_LEVEL)
+RCLIPBOARD_PY_LOG_LEVEL := DEBUG
 
 # Docker
 IMAGE ?= rclipboard:latest
@@ -24,9 +26,10 @@ help:
 	@echo "  run         - run server (TCP)"
 	@echo "  run-dev     - run server with reload (TCP)"
 	@echo "  run-uds     - run server on Unix Domain Socket"
+	@echo "  run-uds-dev - run server with reload on Unix Domain Socket"
 	@echo "  run-https   - run server with HTTPS (uses $(KEY)/$(CERT))"
 	@echo "  run-proxy   - run server in proxy mode (env-driven upstream)"
-	@echo "  run-dev-proxy - run server with reload + proxy mode"
+	@echo "  run-proxy-dev - run server with reload + proxy mode"
 	@echo "  cert        - generate self-signed cert (CN=localhost)"
 	@echo "  cert-san    - generate self-signed cert with SANs"
 	@echo "  status      - GET /status"
@@ -51,27 +54,64 @@ install:
 	python -m pip install -U pip fastapi uvicorn websockets
 
 run:
+	RCLIPBOARD_PROXY=0 \
+	RCLIPBOARD_LOG_LEVEL=$(RCLIPBOARD_LOG_LEVEL) \
+	RCLIPBOARD_PY_LOG_LEVEL=$(RCLIPBOARD_PY_LOG_LEVEL) \
+	RCLIPBOARD_PROXY_ADDR=$(UPSTREAM_HOST) \
+	RCLIPBOARD_PROXY_PORT=$(UPSTREAM_PORT) \
+	RCLIPBOARD_UDS=$() \
 	uvicorn app.main:app --host $(HOST) --port $(PORT) --log-level $(LOG_LEVEL)
 
 run-dev:
+	RCLIPBOARD_PROXY=0 \
+	RCLIPBOARD_LOG_LEVEL=$(RCLIPBOARD_LOG_LEVEL) \
+	RCLIPBOARD_PY_LOG_LEVEL=$(RCLIPBOARD_PY_LOG_LEVEL) \
+	RCLIPBOARD_PROXY_ADDR=$(UPSTREAM_HOST) \
+	RCLIPBOARD_PROXY_PORT=$(UPSTREAM_PORT) \
+	RCLIPBOARD_PROXY_UDS=$(UPSTREAM_UDS) \
 	uvicorn app.main:app --host $(HOST) --port $(PORT) --log-level $(LOG_LEVEL) --reload
 
 run-uds:
+	RCLIPBOARD_PROXY=0 \
+	RCLIPBOARD_LOG_LEVEL=$(RCLIPBOARD_LOG_LEVEL) \
+	RCLIPBOARD_PY_LOG_LEVEL=$(RCLIPBOARD_PY_LOG_LEVEL) \
+	RCLIPBOARD_PROXY_ADDR=$(UPSTREAM_HOST) \
+	RCLIPBOARD_PROXY_PORT=$(UPSTREAM_PORT) \
+	RCLIPBOARD_BIND_UDS=$(UDS) \
 	uvicorn app.main:app --uds $(UDS) --log-level $(LOG_LEVEL)
 
+run-uds-dev:
+	RCLIPBOARD_PROXY=0 \
+	RCLIPBOARD_LOG_LEVEL=$(RCLIPBOARD_LOG_LEVEL) \
+	RCLIPBOARD_PY_LOG_LEVEL=$(RCLIPBOARD_PY_LOG_LEVEL) \
+	RCLIPBOARD_PROXY_ADDR=$(UPSTREAM_HOST) \
+	RCLIPBOARD_PROXY_PORT=$(UPSTREAM_PORT) \
+	RCLIPBOARD_BIND_UDS=$(UDS) \
+	uvicorn app.main:app --uds $(UDS) --log-level $(LOG_LEVEL) --reload
+
 run-https: $(KEY) $(CERT)
+	RCLIPBOARD_PROXY=1 \
+	RCLIPBOARD_LOG_LEVEL=$(RCLIPBOARD_LOG_LEVEL) \
+	RCLIPBOARD_PY_LOG_LEVEL=$(RCLIPBOARD_PY_LOG_LEVEL) \
+	RCLIPBOARD_PROXY_ADDR=$(UPSTREAM_HOST) \
+	RCLIPBOARD_PROXY_PORT=$(UPSTREAM_PORT) \
+	RCLIPBOARD_PROXY_UDS=$(UPSTREAM_UDS) \
 	uvicorn app.main:app --host $(HOST) --port $(PORT) \
 		--ssl-keyfile $(KEY) --ssl-certfile $(CERT) --log-level $(LOG_LEVEL)
 
 run-proxy:
 	RCLIPBOARD_PROXY=1 \
+	RCLIPBOARD_LOG_LEVEL=$(RCLIPBOARD_LOG_LEVEL) \
+	RCLIPBOARD_PY_LOG_LEVEL=$(RCLIPBOARD_PY_LOG_LEVEL) \
 	RCLIPBOARD_PROXY_ADDR=$(UPSTREAM_HOST) \
 	RCLIPBOARD_PROXY_PORT=$(UPSTREAM_PORT) \
 	RCLIPBOARD_PROXY_UDS=$(UPSTREAM_UDS) \
 	uvicorn app.main:app --host $(HOST) --port $(PORT) --log-level $(LOG_LEVEL)
 
-run-dev-proxy:
+run-proxy-dev:
 	RCLIPBOARD_PROXY=1 \
+	RCLIPBOARD_LOG_LEVEL=$(RCLIPBOARD_LOG_LEVEL) \
+	RCLIPBOARD_PY_LOG_LEVEL=$(RCLIPBOARD_PY_LOG_LEVEL) \
 	RCLIPBOARD_PROXY_ADDR=$(UPSTREAM_HOST) \
 	RCLIPBOARD_PROXY_PORT=$(UPSTREAM_PORT) \
 	RCLIPBOARD_PROXY_UDS=$(UPSTREAM_UDS) \

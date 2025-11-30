@@ -1,49 +1,71 @@
 from __future__ import annotations
-
+from contextlib import asynccontextmanager
+from app.app_state import AppState
+from messages import (
+    makeResponse,
+    makeResponseError,
+    makeSystemResponse,
+    make_broadcast_publish,
+    normalize_data_items,
+)
 import asyncio
 import os
-from typing import Any
 
 from fastapi import FastAPI
-
+from .app_state import AppState
 from . import http as http_mod
 from . import ws as ws_mod
 from . import xsel as xsel_mod
 from . import proxy as proxy_mod
 
+from logging import Logger
+from .log import get_logger
 
-def create_app() -> FastAPI:
-    app = FastAPI(title="rclipboard", version="0.1.0")
+logger: Logger = get_logger(__name__)
+error = logger.error
+warning = logger.warning
+info = logger.info
+debug = logger.debug
+trace = logger.debug
 
-    # Shared state
-    app.state.bus = asyncio.Queue()
-    app.state.topic_content: dict[str, dict] = {}
-    app.state.subs: dict[str, set[ws_mod.Connection]] = {}
 
-    @app.on_event("startup")
-    async def _startup():
-        app.state.dispatcher_task = asyncio.create_task(ws_mod.dispatcher(app),
-                                                        name="dispatcher")
-        # optional xsel poller
-        xsel_mod.install_xsel(app)
-        # optional proxy
-        proxy_mod.install_proxy(app)
+async def startup(app: FastAPI):
 
-    @app.on_event("shutdown")
-    async def _shutdown():
-        task = getattr(app.state, "dispatcher_task", None)
-        if task:
-            task.cancel()
-            try:
-                await task
-            except asyncio.CancelledError:
-                pass
-
+    app.state.main = AppState(app)
     # HTTP routes
     http_mod.install_http_handlers(app)
 
     # WS route
     ws_mod.install_ws(app)
+
+    # optional xsel poller
+    # xsel_mod.install_xsel(app)
+    # optional proxy
+    # proxy_mod.install_proxy(app)
+
+
+async def shutdown(app: FastAPI):
+    task = getattr(app.state, "dispatcher_task", None)
+    if task:
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+    pass
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    await startup(app)
+    yield
+    await shutdown(app)
+
+
+def create_app() -> FastAPI:
+    app = FastAPI(title="rclipboard", version="0.1.0", lifespan=lifespan)
+    info(f"create_app: {app}")
+    # Shared state
 
     return app
 
@@ -72,5 +94,8 @@ if __name__ == "__main__":
         log_level=os.environ.get("RCLIPBOARD_LOG_LEVEL", "info"),
         reload=False,
     )
+
+    import pdb
+    pdb.set_trace()
     server = uvicorn.Server(config)
     server.run()
