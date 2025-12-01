@@ -2,9 +2,8 @@ from json import JSONEncoder
 import json
 from fastapi import FastAPI
 from typing import Any
-from abc import ABC, abstractmethod
 import asyncio
-
+from .types import TopicData, Connection
 from logging import Logger
 from app.log import get_logger
 from messages import utc_timestamp
@@ -31,40 +30,11 @@ class Bus:
     async def get(self):
         return await self.q.get()
 
-    async def put(self, data):
+    async def put(self, data: TopicData):
         return await self.q.put(data)
 
-    async def put_nowait(self, data):
+    async def put_nowait(self, data: TopicData):
         return await self.q.put_nowait(data)
-
-
-class Connection(ABC):
-
-    def __init__(self):
-        pass
-
-    @abstractmethod
-    async def enqueue_topic_data(self, data: dict[str, object]):
-        pass
-
-    @abstractmethod
-    async def send(self, data: dict[str, object]):
-        pass
-
-    def __repr__(self) -> str:
-        return "conn"
-
-    def __str__(self) -> str:
-        return "conn"
-
-
-class ConnectionEncoder(JSONEncoder):
-
-    def default(self, o):
-        if isinstance(o, Connection):
-            return {"name": str(o)}
-        else:
-            return JSONEncoder.default(o)
 
 
 def make_dict(**kwargs) -> dict[str, object]:
@@ -75,10 +45,9 @@ def make_dict(**kwargs) -> dict[str, object]:
 def make_topic_data(*, source: Connection, topic: str, value: str, type: str,
                     encoding: str, app: str):
     return make_dict(source=source,
-                     data=make_dict(topic=topic,
-                                    value=value,
-                                    type=type,
-                                    encoding=encoding),
+                     topic=topic,
+                     value=make_dict(value=value, type=type,
+                                     encoding=encoding),
                      meta=make_dict(app=app))
 
 
@@ -111,7 +80,7 @@ class AppState:
             except RuntimeError as e:
                 error(f"fail: {e}")
 
-    async def _proces_data_item(self, item: dict[str, object]):
+    async def _proces_data_item(self, item: TopicData):
         data0 = item.get("data", {})
         data = data0.get("data")
         info(f"_proces_data_item data0: {data0}")
@@ -138,14 +107,14 @@ class AppState:
             ts=ts or utc_timestamp(),
         )
 
-    async def _dispatch_data_item(self, topic: str, item: dict[str, object]):
+    async def _dispatch_data_item(self, topic: str, item: TopicData):
         subs: set[Connection] | None = self.subs.get(topic)
         info(f"subs: {subs}")
         if not subs:
             return
-        payload: dict[str,
-                      object] = self.make_broadcast_clip(data=item.get("data"),
-                                                         meta=item.get("meta"))
+        payload = TopicData(
+            self.make_broadcast_clip(data=item.get("data"),
+                                     meta=item.get("meta")))
         source = item.get("data", {}).get("source")
         info(f"dispatch source: {source} payload: {payload}")
         for conn in subs:
@@ -153,9 +122,9 @@ class AppState:
                 continue
             await conn.enqueue_topic_data(payload)
 
-    async def _proces_put_item(self, item: dict[str, object]):
+    async def _proces_put_item(self, topic_data: TopicData):
         # Update content store and fan-out
-        await self._proces_data_item(item)
+        await self._proces_data_item(topic_data)
 
     async def _proces_get_item(self, subject: str, item: dict[str, object]):
         try:
@@ -193,15 +162,17 @@ class AppState:
             action: str = item.get("action")
             if action and action == "put":
                 info(f"put item: {item}")
-                await self._proces_put_item(item)
+                payload = item.get("payload")
+                await self._proces_put_item(payload)
             elif action and action.startswith("get:"):
                 _, subject = action.split(":")
-                trace(f"get subject: {subject}")
-                await self._proces_get_item(subject, item)
+                payload = item.get("payload")
+                trace(f"get subject: {subject} payload: {payload}")
+                await self._proces_get_item(subject, payload)
             else:
                 raise RuntimeError(f"unknown action: {action}")
         except Exception as e:
-            error(f"Exception '{type(e)}'")
+            error(f"Exception '{type(e)}': {e}")
 
         print("process_queue: done.. ")
 
@@ -209,16 +180,22 @@ class AppState:
         loop = self.dispatcher_task.get_loop()
         fut = loop.create_future()
         trace("put request")
-        await self.bus.put({"action": action, "data": data, "future": fut})
+        await self.bus.put({
+            "action": action,
+            "payload": {
+                "data": data,
+                "future": fut
+            }
+        })
         trace("wait for future")
 
         return await fut
 
     async def enqueue_topic_data(self, data):
-        await self.bus.put({"action": "put", "data": data})
+        await self.bus.put({"action": "put", "payload": data})
 
     async def enqueue_topic_data_nowait(self, data):
-        await self.bus.put_nowait({"action": "put", "data": data})
+        await self.bus.put_nowait({"action": "put", "payload": data})
 
 
 def subsctibe_client(app: FastAPI, client: Connection, topics: list[str]):
@@ -237,18 +214,18 @@ async def enqueue_request_topics(app: FastAPI):
     return await app.state.main.enqueue_request("get:topics")
 
 
-async def enqueue_request_topic(app: FastAPI, topic):
+async def enqueue_request_topic(app: FastAPI, topic: str):
     return await app.state.main.enqueue_request("get:topic", topic)
 
 
-async def enqueue_topic_request(app: FastAPI, topic):
+async def enqueue_topic_request(app: FastAPI, topic: str):
     return await enqueue_request_topic(app, topic)
 
 
-async def enqueue_topic_data(app: FastAPI, data):
+async def enqueue_topic_data(app: FastAPI, data: TopicData):
     info(f"data: {data}")
     return await app.state.main.enqueue_topic_data(data)
 
 
-async def enqueue_topic_data_nowait(app: FastAPI, data):
+async def enqueue_topic_data_nowait(app: FastAPI, data: TopicData):
     return await app.state.main.enqueue_topic_data_nowait(data)

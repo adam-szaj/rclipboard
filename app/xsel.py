@@ -7,8 +7,8 @@ from typing import Any
 import shutil
 import json
 # from asyncio.timeouts import timeout
-from .app_state import enqueue_topic_data, Connection, register_client, make_topic_data, subsctibe_client
-
+from .app_state import enqueue_topic_data, register_client, make_topic_data, subsctibe_client
+from .types import TopicData, Connection
 from fastapi import FastAPI
 from messages import utc_timestamp
 
@@ -132,9 +132,6 @@ class XselConnection(Connection):
         if self.enabled:
             info("start xsel task")
             self.task = a.create_task(self.poller(), name="xsel_poller")
-
-        # Fire and forget health check
-        # a.create_task(_health_check(app))
 
     def __repr__(self) -> str:
         return "'xsel'"

@@ -1,5 +1,7 @@
 from __future__ import annotations
 import copy
+
+from app.types import TopicData
 from .log import get_logger
 from .app_state import enqueue_topic_data, enqueue_request_topic, enqueue_request_topics, make_topic_data
 
@@ -105,7 +107,8 @@ async def clip(
                                      encoding=data.get("encoding", "base64"),
                                      app="http")
 
-        await enqueue_topic_data(app, topic_data)
+        info(f"topic_data: {topic_data}")
+        await enqueue_topic_data(app, TopicData(**topic_data))
 
     if json:
         req = {"id": pid, "method": "clip"}
