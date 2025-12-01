@@ -3,6 +3,7 @@ SHELL := /bin/bash
 # Configuration
 HOST ?= 127.0.0.1
 PORT ?= 8989
+TEST_PORT ?= 7979
 UDS  ?= $(XDG_RUNTIME_DIR)/rclipboard.sock
 KEY  ?= key.pem
 CERT ?= cert.pem
@@ -11,6 +12,7 @@ LOG_LEVEL ?= debug
 # Proxy upstream config
 UPSTREAM_HOST ?= 127.0.0.1
 UPSTREAM_PORT ?= 8989
+UPSTREAM_TEST_PORT ?= 7979
 UPSTREAM_UDS  ?= $(XDG_RUNTIME_DIR)/rclipboard.sock
 RCLIPBOARD_LOG_LEVEL := $(LOG_LEVEL)
 RCLIPBOARD_PY_LOG_LEVEL := DEBUG
@@ -59,7 +61,7 @@ run:
 	RCLIPBOARD_PY_LOG_LEVEL=$(RCLIPBOARD_PY_LOG_LEVEL) \
 	RCLIPBOARD_PROXY_ADDR=$(UPSTREAM_HOST) \
 	RCLIPBOARD_PROXY_PORT=$(UPSTREAM_PORT) \
-	RCLIPBOARD_UDS=$() \
+	RCLIPBOARD_UDS="" \
 	uvicorn app.main:app --host $(HOST) --port $(PORT) --log-level $(LOG_LEVEL)
 
 run-dev:
@@ -70,6 +72,21 @@ run-dev:
 	RCLIPBOARD_PROXY_PORT=$(UPSTREAM_PORT) \
 	RCLIPBOARD_PROXY_UDS=$(UPSTREAM_UDS) \
 	uvicorn app.main:app --host $(HOST) --port $(PORT) --log-level $(LOG_LEVEL) --reload
+
+
+
+run-test-dev:
+	RCLIPBOARD_PROXY=0 \
+	RCLIPBOARD_LOG_LEVEL=$(RCLIPBOARD_LOG_LEVEL) \
+	RCLIPBOARD_PY_LOG_LEVEL=$(RCLIPBOARD_PY_LOG_LEVEL) \
+	RCLIPBOARD_PROXY_ADDR=$(UPSTREAM_HOST) \
+	RCLIPBOARD_PROXY_PORT=$(UPSTREAM_TEST_PORT) \
+	RCLIPBOARD_PROXY_UDS=$(UPSTREAM_UDS) \
+	uvicorn app.main:app --host $(HOST) --port $(TEST_PORT) --log-level $(LOG_LEVEL) --reload
+
+run-smoke-test:
+	date | ./rclipctl clip -c --host $(HOST) --port $(TEST_PORT) --uds ""
+	./rclipctl getclip -c --host $(HOST) --port $(TEST_PORT) --uds ""
 
 run-uds:
 	RCLIPBOARD_PROXY=0 \
