@@ -30,5 +30,5 @@ while true; do
     esac
 done
 
-exec "$THIS_DIR/rclipctl" fetch -t "$topic" "$@"
+exec "$THIS_DIR/rclipctl" getclip -t "$topic" "$@"
 

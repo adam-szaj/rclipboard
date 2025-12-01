@@ -8,7 +8,7 @@ echo "Health:" >&2
 ./rclipctl health --host "$HOST" --port "$PORT"
 
 echo "Publish (hello -> c):" >&2
-echo -n 'hello' | ./rclipctl publish -c --encoding base64 --host "$HOST" --port "$PORT"
+echo -n 'hello' | ./rclipctl clip -c --encoding base64 --host "$HOST" --port "$PORT"
 
 echo "Fetch (JSON envelope):" >&2
 ./rclipctl fetch -c --json --host "$HOST" --port "$PORT" | jq .

@@ -45,7 +45,7 @@ ServerToClientMessage:
           error:
     broadcast:
       action:
-        - publish:
+        - clip:
             # data MAY be a single DataItem OR a list of DataItem
             # single object form:
             data:
@@ -77,7 +77,7 @@ CommonMessage:
 # - Otherwise: success -> HTTP status only with empty body; error -> text body.
 
 # DataItem (common)
-# Reusable description for elements in publish.data (single or list)
+# Reusable description for elements in clip.data (single or list)
 DataItem:
   topic:
   value:

@@ -7,21 +7,32 @@ from typing import Any
 import shutil
 import json
 # from asyncio.timeouts import timeout
+from .app_state import enqueue_topic_data, Connection, register_client, make_topic_data, subsctibe_client
 
 from fastapi import FastAPI
-from .log import get_logger
-from messages import utcTimestamp
+from messages import utc_timestamp
 
-XSEL_PATH = os.environ.get("RCLIPBOARD_XSEL_PATH", "/usr/bin/xsel")
-XSEL_ENABLED = os.environ.get("RCLIPBOARD_XSEL",
-                              "1") not in ("0", "false", "False")
-POLL_INTERVAL_MS = int(os.environ.get("RCLIPBOARD_XSEL_INTERVAL_MS", "500"))
+from logging import Logger
+from .log import get_logger
+from pathlib import Path
+
+logger: Logger = get_logger(__name__)
+error = logger.error
+warning = logger.warning
+info = logger.info
+debug = logger.debug
+trace = logger.debug
+
+XSEL_PATH: Path = Path(os.environ.get("RCLIPBOARD_XSEL_PATH", "/usr/bin/xsel"))
+XSEL_ENABLED: bool = os.environ.get("RCLIPBOARD_XSEL",
+                                    "1") not in ("0", "false", "False")
+POLL_INTERVAL_MS: int = int(
+    os.environ.get("RCLIPBOARD_XSEL_INTERVAL_MS", "500"))
 
 # Topic to xsel option mapping
 TOPIC_TO_XSEL = {
     "c": "-b",  # clipboard
     "p": "-p",  # primary
-    "s": "-s",  # secondary
 }
 
 
@@ -55,14 +66,10 @@ async def _exec(*args: str,
             stdout, stderr = await a.wait_for(proc.communicate(),
                                               timeout=timeout)
         else:
-            # print(
-            #     f"communicate timeout: {timeout} args: {args} input_data: {input_data}"
-            # )
             stdout, stderr = await a.wait_for(
                 proc.communicate(input=input_data), timeout=timeout)
         return proc.returncode, stdout or b"", stderr or b""
     except a.TimeoutError:
-        # get_logger(__name__).debug(f"xsel exec timeout: args={args}")
         try:
             proc.terminate()
             await a.wait_for(proc.wait(), timeout=0.5)
@@ -75,7 +82,7 @@ async def _exec(*args: str,
 async def read_selection(opt: str, timeout: float) -> bytes:
     # If no DISPLAY, xsel cannot work
     if not os.environ.get("DISPLAY"):
-        get_logger(__name__).trace("xsel read_selection skipped: no DISPLAY")
+        trace("xsel read_selection skipped: no DISPLAY")
         return b""
     code, out, err = await _exec(XSEL_PATH, opt, "-o", timeout=timeout)
     if code != 0:
@@ -86,10 +93,169 @@ async def read_selection(opt: str, timeout: float) -> bytes:
 async def write_selection(opt: str, data: bytes, timeout: float) -> None:
     # If no DISPLAY, skip silently
     if not os.environ.get("DISPLAY"):
-        get_logger(__name__).trace("xsel write_selection skipped: no DISPLAY")
+        trace("xsel write_selection skipped: no DISPLAY")
         return
     # Place -i before selection flag is fine; keep order consistent
     await _exec(XSEL_PATH, "-n", "-i", opt, input_data=data, timeout=timeout)
+
+
+class XselState:
+
+    def __init__(self, selection: str, opt: str):
+        self.selection: str = selection
+        self.opt: str = opt
+        self.applied: bytes = b''
+        self.seen: bytes = b''
+        self.applied_ts: str | None = ''
+        self.seen_ts: str | None = ''
+        self.poll_ts: str | None = None
+
+
+class XselConnection(Connection):
+
+    def __init__(self, app: FastAPI):
+        Connection.__init__(self)
+        self.app = app
+        self.enabled: bool = XSEL_ENABLED and os.path.exists(XSEL_PATH)
+        self.selection_states: dict[str, XselState] = {}
+
+        for topic, opt in TOPIC_TO_XSEL.items():
+            self.selection_states[topic] = XselState(topic, opt)
+
+        self.config = {
+            "path": XSEL_PATH,
+            "interval_ms": POLL_INTERVAL_MS,
+        }
+        self.health: dict | None = None
+        self.queue: a.Queue = a.Queue(maxsize=32)
+
+        if self.enabled:
+            info("start xsel task")
+            self.task = a.create_task(self.poller(), name="xsel_poller")
+
+        # Fire and forget health check
+        # a.create_task(_health_check(app))
+
+    def __repr__(self) -> str:
+        return "'xsel'"
+
+    def __str__(self) -> str:
+        return "'xsel'"
+
+    async def write_item(self, topic: str, item: dict[str, str]):
+        opt = _selection_for_topic(topic)
+        data = item.get("data", {}).get("data", {})
+        info(f"topic: {topic} opt: {opt}")
+        if not opt:
+            return
+        value: str | dict[str, str] = data.get("value", "")
+        value_type: str = data.get("type", "binary")
+        value_encoding: str = data.get("encoding", "base64")
+        # compute bytes
+        data_bytes = b''
+        if value_type == "binary":
+            if value_encoding == "base64":
+                data_bytes = _b64_decode(value)
+            elif value_encoding == "hex":
+                data_bytes = bytes.fromhex(value)
+        else:
+            if isinstance(value, str):
+                data_bytes = value.encode()
+            else:
+                data_bytes = json.dumps(value, separators=(",", ":")).encode()
+
+        info(f"write_selection start: {data_bytes}")
+        await write_selection(opt, data_bytes, timeout=2.5)
+        info(f"write_selection done")
+
+        # remember last applied and seen
+        ts = utc_timestamp()
+
+        sel_state = self.selection_states[topic]
+
+        sel_state.applied = data_bytes
+        sel_state.applied_ts = ts
+        sel_state.seen = data_bytes
+        sel_state.seen_ts = ts
+
+    async def read_items(self):
+        for topic, state in self.selection_states.items():
+            try:
+                await self.read_item(topic, state)
+            except Exception as e:
+                debug(f"xsel read/clip error: {e}", exc_info=True)
+
+    async def read_item(self, topic: str, state: XselState):
+        # On timeout or after writes, consider polling
+        state.poll_ts = utc_timestamp()
+        opt = state.opt
+        current = await read_selection(opt, timeout=1)
+
+        if current == state.seen:
+            return
+
+        # update last seen immediately
+        state.seen = current
+        state.seen_ts = state.poll_ts
+        if current == state.applied:
+            return
+
+        topic_data = make_topic_data(source=self,
+                                     topic=topic,
+                                     value=_b64(current),
+                                     type="binary",
+                                     encoding="base64",
+                                     app="xsel")
+        await enqueue_topic_data(self.app, topic_data)
+
+    async def poller(self):
+        interval = POLL_INTERVAL_MS / 1000.0
+        q: a.Queue = self.queue
+        while True:
+            try:
+                item = await a.wait_for(q.get(), timeout=interval)
+                info(f"xsel got item: {item}")
+                # Drain any burst to reduce context switching
+                q.task_done()
+                topic = item.get("data", {}).get("data", {}).get("topic")
+                info(f"write_item start")
+                await self.write_item(topic, item)
+                info(f"write_item done")
+
+            except a.TimeoutError:
+                # trace("xsel poller write wait timeout")
+                pass
+            except Exception as e:
+                debug(f"xsel write error: {e}", exc_info=True)
+
+            await self.read_items()
+
+    async def enqueue_topic_data(self, data):
+        info(f"enqueue_topic_data: {data}")
+        topic = data.get("data", {}).get("data", {}).get("topic")
+        info(f"topic: {topic}")
+        assert topic
+        if not _selection_for_topic(topic):
+            return
+        try:
+            await self.queue.put(data)
+        except a.QueueFull:
+            trace("xsel queue full; dropping oldest")
+            # drop oldest (best effort) and enqueue
+            try:
+                self.queue.get_nowait()
+                self.queue.task_done()
+            except a.QueueEmpty:
+                trace("xsel queue empty while dropping oldest")
+
+    async def send(self, data: dict[str, object]):
+        pass
+
+
+def install_xsel(app: FastAPI) -> None:
+    conn = XselConnection(app)
+    register_client(app, conn)
+    subsctibe_client(app, conn, TOPIC_TO_XSEL.keys())
 
 
 def _topic_for_selection(opt: str) -> str | None:
@@ -101,154 +267,8 @@ def _selection_for_topic(topic: str) -> str | None:
     return TOPIC_TO_XSEL.get(topic)
 
 
-async def on_topic_update(app: FastAPI, data_item: dict) -> None:
-    """Enqueue DataItem for xsel application by the poller.
-
-    The poller loop performs actual writes and bookkeeping to avoid feedback loops.
-    """
-    if not getattr(app.state, "xsel_enabled", False):
-        return
-    topic = data_item.get("topic")
-    if not _selection_for_topic(topic):
-        return
-    try:
-        # print(f"enqueue data_item:: {data_item}")
-        app.state.xsel_queue.put_nowait(data_item)
-    except a.QueueFull:
-        get_logger(__name__).trace("xsel queue full; dropping oldest")
-        # drop oldest (best effort) and enqueue
-        try:
-            app.state.xsel_queue.get_nowait()
-            app.state.xsel_queue.task_done()
-        except a.QueueEmpty:
-            get_logger(__name__).trace(
-                "xsel queue empty while dropping oldest")
-        await app.state.xsel_queue.put(data_item)
-
-
-async def poller(app: FastAPI):
-    """Single loop handling outbound writes and periodic polling reads.
-
-    - Waits with timeout for DataItems enqueued by on_topic_update(); writes to X.
-    - On timeout, polls X selections and publishes user-originated changes.
-    """
-    interval = POLL_INTERVAL_MS / 1000.0
-    q: a.Queue = app.state.xsel_queue
-    while True:
-        wrote = False
-        try:
-            # Wait for one item up to interval
-            di = await a.wait_for(q.get(), timeout=interval)
-            # print(f"got data from queue: {di}")
-            # Drain any burst to reduce context switching
-            batch = [di]
-            # while True:
-            #     try:
-            #         qdi = q.get_nowait()
-            #         batch.append(qdi)
-            #     except a.QueueEmpty:
-            #         break
-            # Apply all queued writes
-            # print(f"batch len: {len(batch)} di: {di}")
-            for item in batch:
-                # print(f"item from batch: {item}")
-                topic = item.get("topic")
-                opt = _selection_for_topic(topic)
-                if not opt:
-                    q.task_done()
-                    continue
-                value = item.get("value")
-                value_type = item.get("valueType")
-                value_encoding = item.get("valueEncoding")
-                # compute bytes
-                if value_type == "binary":
-                    if value_encoding == "base64":
-                        data_bytes = _b64_decode(value)
-                    elif value_encoding == "hex":
-                        data_bytes = bytes.fromhex(value)
-                    else:
-                        q.task_done()
-                        continue
-                else:
-                    if isinstance(value, str):
-                        data_bytes = value.encode()
-                    else:
-
-                        data_bytes = json.dumps(value,
-                                                separators=(",",
-                                                            ":")).encode()
-                await write_selection(opt, data_bytes, timeout=2.5)
-                # remember last applied and seen
-                ts = utcTimestamp()
-                app.state.xsel_last_applied[opt] = data_bytes
-                app.state.xsel_last_applied_ts[opt] = ts
-                app.state.xsel_last_seen[opt] = data_bytes
-                app.state.xsel_last_seen_ts[opt] = ts
-                wrote = True
-            q.task_done()
-        except a.TimeoutError:
-            get_logger(__name__).trace("xsel poller write wait timeout")
-        except Exception as e:
-            get_logger(__name__).debug(f"xsel write error: {e}", exc_info=True)
-
-        # On timeout or after writes, consider polling
-        try:
-            app.state.xsel_last_poll_ts = utcTimestamp()
-            for topic, opt in TOPIC_TO_XSEL.items():
-                current = await read_selection(opt, timeout=1)
-                last_applied = app.state.xsel_last_applied.get(opt)
-                last_seen = app.state.xsel_last_seen.get(opt)
-                if current == last_seen:
-                    continue
-                else:
-                    # print(f"current is not the same as the last one")
-                    pass
-                # update last seen immediately
-                app.state.xsel_last_seen[opt] = current
-                app.state.xsel_last_seen_ts[opt] = utcTimestamp()
-                if last_applied is not None and current == last_applied:
-                    # our own write: skip publish
-                    continue
-                di2 = {
-                    "topic": topic,
-                    "value": _b64(current),
-                    "valueType": "binary",
-                    "valueEncoding": "base64",
-                }
-                # print(f"poller di2: {di2}")
-                await app.state.main.bus.put({
-                    "source": None,
-                    "meta": {
-                        "app": "xsel"
-                    },
-                    "data_items": [di2]
-                })
-        except Exception as e:
-            get_logger(__name__).debug(f"xsel read/publish error: {e}",
-                                       exc_info=True)
-
-
-def install_xsel(app: FastAPI) -> None:
-    app.state.xsel_enabled = XSEL_ENABLED and os.path.exists(XSEL_PATH)
-    app.state.xsel_last_applied: dict[str, bytes] = {}
-    app.state.xsel_last_seen: dict[str, bytes] = {}
-    app.state.xsel_last_applied_ts: dict[str, str] = {}
-    app.state.xsel_last_seen_ts: dict[str, str] = {}
-    app.state.xsel_last_poll_ts: str | None = None
-    app.state.xsel_config = {
-        "path": XSEL_PATH,
-        "interval_ms": POLL_INTERVAL_MS,
-    }
-    app.state.xsel_health: dict | None = None
-    app.state.xsel_queue: a.Queue = a.Queue(maxsize=32)
-    if app.state.xsel_enabled:
-        app.state.xsel_task = a.create_task(poller(app), name="xsel_poller")
-    # Fire and forget health check
-    a.create_task(_health_check(app))
-
-
 async def _health_check(app: FastAPI) -> None:
-    """Populate xsel health info in app.state.xsel_health and warn if bad."""
+    """Populate xsel health info in self.xsel_health and warn if bad."""
     exists = os.path.exists(XSEL_PATH)
     executable = os.access(XSEL_PATH, os.X_OK)
     in_path = shutil.which(os.path.basename(XSEL_PATH)) is not None
@@ -266,6 +286,6 @@ async def _health_check(app: FastAPI) -> None:
             results["selections"][opt] = {"read_ok": code == 0}
             ok = ok and (code == 0)
     results["ok"] = ok
-    app.state.xsel_health = results
+    self.health = results
     if not ok:
         print(f"[xsel] health check failed: {results}")

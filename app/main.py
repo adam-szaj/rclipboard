@@ -1,13 +1,6 @@
 from __future__ import annotations
 from contextlib import asynccontextmanager
 from app.app_state import AppState
-from messages import (
-    makeResponse,
-    makeResponseError,
-    makeSystemResponse,
-    make_broadcast_publish,
-    normalize_data_items,
-)
 import asyncio
 import os
 
@@ -39,7 +32,7 @@ async def startup(app: FastAPI):
     ws_mod.install_ws(app)
 
     # optional xsel poller
-    # xsel_mod.install_xsel(app)
+    xsel_mod.install_xsel(app)
     # optional proxy
     # proxy_mod.install_proxy(app)
 

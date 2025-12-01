@@ -1,31 +1,24 @@
 from __future__ import annotations
-from .app_state import enqueue_topic_data
 
 import asyncio as a
-from typing import Any
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from .log import get_logger
 
 from messages import (
     makeResponse,
     makeResponseError,
     makeSystemResponse,
-    make_broadcast_publish,
     normalize_data_items,
 )
-from . import xsel as xsel_mod
-from . import proxy as proxy_mod
+from .app_state import Connection, enqueue_topic_data
+from .log import get_logger as gl
 
-from .log import get_logger
-
-logger = get_logger(__name__)
+logger = gl(__name__)
 error = logger.error
 warning = logger.warning
 info = logger.info
 debug = logger.debug
 trace = logger.trace
-from .app_state import Connection
 
 
 class WSConnection(Connection):
@@ -98,7 +91,7 @@ async def _handler(app: FastAPI, conn: Connection, msg: dict) -> dict | None:
     if mtype == "request" and msg.get("action") == "call":
         method = msg.get("method")
 
-        if method == "publish":
+        if method == "clip":
             meta = msg.get("meta", {})
             try:
                 items = normalize_data_items(msg.get("params", {}).get("data"))
@@ -106,7 +99,7 @@ async def _handler(app: FastAPI, conn: Connection, msg: dict) -> dict | None:
                 return makeResponseError(msg, {"message": str(e)})
             data = {"source": conn, "meta": meta, "data_items": items}
             await enqueue_topic_data(app, data)
-            return makeResponse(msg, value={"published": len(items)})
+            return makeResponse(msg, value={"clipped": len(items)})
         if method == "get":
             topic = msg.get("params", {}).get("topic")
             if not topic:

@@ -19,7 +19,7 @@ Quick Start (Short)
 1) Run server quickly:
    uvicorn app.main:app --host 127.0.0.1 --port 8989
 2) Publish text:
-   echo -n 'hello' | ./rclipctl publish -c --encoding base64 --json | jq .
+   echo -n 'hello' | ./rclipctl clip -c --encoding base64 --json | jq .
 3) Fetch last value:
    ./rclipctl fetch -c --json | jq .
 4) Health:
@@ -35,10 +35,10 @@ Quick Start
    uvicorn app.main:app --host 127.0.0.1 --port 8989
 
 3) Publish (HTTP, JSON envelope):
-   echo -n 'hello' | ./rclipctl publish -c --encoding base64 --json --host 127.0.0.1 --port 8989 | jq .
+   echo -n 'hello' | ./rclipctl clip -c --encoding base64 --json --host 127.0.0.1 --port 8989 | jq .
    # or with curl
    curl -fsS -X POST \
-     'http://127.0.0.1:8989/publish/c?response-type=json' \
+     'http://127.0.0.1:8989/clip/c?response-type=json' \
      -H 'Content-Type: application/json' \
      -d '{"meta":{"app":"curl"},"data":{"topic":"c","value":"aGVsbG8","valueType":"binary","valueEncoding":"base64"}}' | jq .
 
@@ -58,12 +58,12 @@ Protocol (Summary)
   - valueType?: string (string|number|boolean|object|array|binary)
   - valueEncoding?: string (base64 with padding | hex lowercase) — required if valueType==binary
 - HTTP
-  - POST /publish/{topic}: body {meta?, data: DataItem|DataItem[]} → 202 or Response.return when ?response-type=json
+  - POST /clip/{topic}: body {meta?, data: DataItem|DataItem[]} → 202 or Response.return when ?response-type=json
   - GET /fetch/{topic}: 200 empty or Response.return when ?response-type=json
   - GET /topics, GET /status, GET /health
 - WebSocket
-  - Client → Server: system-request (subscribe|unsubscribe|ping); request/call (method: publish|get)
-  - Server → Client: system-response (subscribed|unsubscribed|pong), response.return/error, broadcast.publish
+  - Client → Server: system-request (subscribe|unsubscribe|ping); request/call (method: clip|get)
+  - Server → Client: system-response (subscribed|unsubscribed|pong), response.return/error, broadcast.clip
 
 HTTP Examples
 - Status:
@@ -73,8 +73,8 @@ HTTP Examples
   ./rclipctl topics --host 127.0.0.1 --port 8989
   # or: curl -fsS http://127.0.0.1:8989/topics | jq .
 - Publish (status-only mode):
-  echo -n 'hello' | ./rclipctl publish -c --encoding hex --host 127.0.0.1 --port 8989
-  # or: curl -fsS -X POST 'http://127.0.0.1:8989/publish/c' -H 'Content-Type: application/json' \
+  echo -n 'hello' | ./rclipctl clip -c --encoding hex --host 127.0.0.1 --port 8989
+  # or: curl -fsS -X POST 'http://127.0.0.1:8989/clip/c' -H 'Content-Type: application/json' \
   #       -d '{"meta":{"app":"curl"},"data":{"topic":"c","value":"68656c6c6f","valueType":"binary","valueEncoding":"hex"}}'
 - Fetch (status-only mode; non‑JSON prints status line):
   ./rclipctl fetch -c --host 127.0.0.1 --port 8989
@@ -84,18 +84,18 @@ HTTP Examples
   # or: curl -fsS http://127.0.0.1:8989/health | jq .
 
 WebSocket Examples
-- Subscribe and publish:
+- Subscribe and clip:
   # subscribe
   {"type":"system-request","id":1,"action":"subscribe","topics":["c"]}
-  # publish
-  {"type":"request","id":2,"action":"call","method":"publish","params":{"data":{"topic":"c","value":"aGVsbG8","valueType":"binary","valueEncoding":"base64"}},"meta":{"app":"demo"}}
+  # clip
+  {"type":"request","id":2,"action":"call","method":"clip","params":{"data":{"topic":"c","value":"aGVsbG8","valueType":"binary","valueEncoding":"base64"}},"meta":{"app":"demo"}}
   # broadcast (from server)
-  {"type":"broadcast","action":"publish","data":{"topic":"c","value":"aGVsbG8","valueType":"binary","valueEncoding":"base64"},"meta":{"app":"demo"},"ts":"..."}
+  {"type":"broadcast","action":"clip","data":{"topic":"c","value":"aGVsbG8","valueType":"binary","valueEncoding":"base64"},"meta":{"app":"demo"},"ts":"..."}
 
 CLI Helper
-- Subcommands: publish, fetch, status, topics
+- Subcommands: clip, fetch, status, topics
   - Publish JSON envelope:
-    echo -n 'hello' | ./rclipctl publish -c --encoding base64 --json | jq .
+    echo -n 'hello' | ./rclipctl clip -c --encoding base64 --json | jq .
   - Fetch JSON envelope:
     ./rclipctl fetch -c --json | jq .
   - Fetch (non‑JSON, convert encoding to hex):
@@ -121,7 +121,7 @@ tmux Integration (Plugin)
   - `@rclip_bin` (rclipctl)
 
 - Key bindings installed by the plugin:
-  - Copy in copy-mode-vi: `y` → publish to rclipboard
+  - Copy in copy-mode-vi: `y` → clip to rclipboard
   - Paste: `P` → fetch from rclipboard into pane
 
 - Status bar: adds `rc: up xsel:✓ pxy:✓` (colors) via `scripts/health.sh`.

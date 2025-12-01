@@ -53,14 +53,14 @@ class ProxyClient:
         }
         await self._send_json(msg)
 
-    async def send_publish(self, items: list[dict], meta: dict | None = None):
+    async def send_clip(self, items: list[dict], meta: dict | None = None):
         if not self.connected:
             return
         payload = {
             "type": "request",
             "id": next_id(),
             "action": "call",
-            "method": "publish",
+            "method": "clip",
             "params": {
                 "data": items
             },
@@ -88,7 +88,7 @@ class ProxyClient:
                             continue
                         # Expect upstream broadcasts
                         if msg.get("type") == "broadcast" and msg.get(
-                                "action") == "publish":
+                                "action") == "clip":
                             data = msg.get("data")
                             items = data if isinstance(data, list) else [data]
                             data = {
@@ -130,8 +130,8 @@ def install_proxy(app: FastAPI) -> None:
     app.state.proxy_task = a.create_task(client.run(), name="proxy_upstream")
 
 
-async def on_local_publish(app: FastAPI, data_items: list[dict], meta: dict,
-                           source: Any) -> None:
+async def on_local_clip(app: FastAPI, data_items: list[dict], meta: dict,
+                        source: Any) -> None:
     """
     Forward local publishes upstream when proxy is enabled,
     excluding upstream-originated ones.
@@ -145,6 +145,6 @@ async def on_local_publish(app: FastAPI, data_items: list[dict], meta: dict,
     if not client or not client.connected:
         return
     try:
-        await client.send_publish(data_items, meta=meta)
+        await client.send_clip(data_items, meta=meta)
     except Exception as e:
         debug(f"proxy forward error: {e}", exc_info=True)

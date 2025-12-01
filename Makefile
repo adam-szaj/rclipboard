@@ -42,7 +42,7 @@ help:
 	@echo "  plugin-uninstall - remove installed tmux plugin"
 	@echo "  plugin-reload - reload tmux config to pick up plugin"
 	@echo "  plugin-demo   - launch a temporary tmux session to test plugin"
-	@echo "  smoke         - quick HTTP smoke test (health/publish/fetch)"
+	@echo "  smoke         - quick HTTP smoke test (health/clip/fetch)"
 	@echo "  systemd-user-install - install user units + env (override WorkingDirectory)"
 	@echo "  systemd-user-enable  - enable & start rclipboard.service"
 	@echo "  systemd-user-enable-socket - enable & start rclipboard.socket"

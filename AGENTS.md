@@ -2,12 +2,12 @@
 
 ## Project Structure & Module Organization
 - `rclipboardd.py`: main aiohttp service (HTTP + WebSocket); CLI flags `--proxy`, `--xsel`.
-- `rclipboard_http.py`: REST handlers (`/status`, `/topics`, `/fetch/{topic}`, `/publish/{topic}`).
+- `rclipboard_http.py`: REST handlers (`/status`, `/topics`, `/fetch/{topic}`, `/clip/{topic}`).
 - `rclipboard_ws.py`: WS fanout, per‑client queues, dispatcher, optional upstream proxy.
 - `messages.py`: small JSON/message helpers and timestamps.
 - `ClientInterface.py` / `WsClientInterface.py`: protocol helpers, subscribe/unsubscribe, server/client wrappers.
 - `XselClientInterface.py`: optional X clipboard updater via `xsel`.
-- `rclipctl`: bash helper to publish clipboard data via HTTP.
+- `rclipctl`: bash helper to clip clipboard data via HTTP.
 
 ## Build, Test, and Development Commands
 - Create venv + deps: `python3 -m venv .venv && . .venv/bin/activate && pip install -U pip aiohttp websockets watchfiles`
@@ -25,7 +25,7 @@
 ## Testing Guidelines
 - Framework: prefer `pytest` with `aiohttp` test utilities for HTTP and WS.
 - Place tests under `tests/` mirroring module names (e.g., `tests/test_http.py`).
-- Cover: status route, publish→dispatcher fanout, fetch 404/200, WS subscribe/ack.
+- Cover: status route, clip→dispatcher fanout, fetch 404/200, WS subscribe/ack.
 - Run: `pytest -q` (add as you introduce tests).
 
 ## Commit & Pull Request Guidelines
