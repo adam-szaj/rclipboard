@@ -23,7 +23,6 @@ trace = logger.debug
 
 
 async def startup(app: FastAPI):
-
     app.state.main = AppState(app)
     # HTTP routes
     http_mod.install_http_handlers(app)
@@ -89,6 +88,7 @@ if __name__ == "__main__":
     )
 
     import pdb
+
     pdb.set_trace()
     server = uvicorn.Server(config)
     server.run()

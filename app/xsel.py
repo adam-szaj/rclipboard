@@ -6,9 +6,15 @@ import os
 from typing import Any
 import shutil
 import json
+
 # from asyncio.timeouts import timeout
-from .app_state import enqueue_topic_data, register_client, make_topic_data, subsctibe_client
-from .types import TopicData, Connection
+from .app_state import (
+    enqueue_topic_data,
+    register_client,
+    make_topic_data,
+    subsctibe_client,
+)
+from .types import TopicData, Connection, ValueData
 from fastapi import FastAPI
 from messages import utc_timestamp
 
@@ -24,10 +30,12 @@ debug = logger.debug
 trace = logger.debug
 
 XSEL_PATH: Path = Path(os.environ.get("RCLIPBOARD_XSEL_PATH", "/usr/bin/xsel"))
-XSEL_ENABLED: bool = os.environ.get("RCLIPBOARD_XSEL",
-                                    "1") not in ("0", "false", "False")
-POLL_INTERVAL_MS: int = int(
-    os.environ.get("RCLIPBOARD_XSEL_INTERVAL_MS", "500"))
+XSEL_ENABLED: bool = os.environ.get("RCLIPBOARD_XSEL", "1") not in (
+    "0",
+    "false",
+    "False",
+)
+POLL_INTERVAL_MS: int = int(os.environ.get("RCLIPBOARD_XSEL_INTERVAL_MS", "500"))
 
 # Topic to xsel option mapping
 TOPIC_TO_XSEL = {
@@ -44,9 +52,9 @@ def _b64_decode(s: str) -> bytes:
     return base64.b64decode(s)
 
 
-async def _exec(*args: str,
-                input_data: bytes | None = None,
-                timeout: float = 5.0) -> tuple[int, bytes, bytes]:
+async def _exec(
+    *args: str, input_data: bytes | None = None, timeout: float = 5.0
+) -> tuple[int, bytes, bytes]:
     """Run a process with optional stdin and a timeout.
 
     xsel -i may remain alive to own the selection on some setups; we therefore
@@ -63,11 +71,11 @@ async def _exec(*args: str,
     )
     try:
         if input_data is None:
-            stdout, stderr = await a.wait_for(proc.communicate(),
-                                              timeout=timeout)
+            stdout, stderr = await a.wait_for(proc.communicate(), timeout=timeout)
         else:
             stdout, stderr = await a.wait_for(
-                proc.communicate(input=input_data), timeout=timeout)
+                proc.communicate(input=input_data), timeout=timeout
+            )
         return proc.returncode, stdout or b"", stderr or b""
     except a.TimeoutError:
         try:
@@ -100,19 +108,17 @@ async def write_selection(opt: str, data: bytes, timeout: float) -> None:
 
 
 class XselState:
-
     def __init__(self, selection: str, opt: str):
         self.selection: str = selection
         self.opt: str = opt
-        self.applied: bytes = b''
-        self.seen: bytes = b''
-        self.applied_ts: str | None = ''
-        self.seen_ts: str | None = ''
+        self.applied: bytes = b""
+        self.seen: bytes = b""
+        self.applied_ts: str | None = ""
+        self.seen_ts: str | None = ""
         self.poll_ts: str | None = None
 
 
 class XselConnection(Connection):
-
     def __init__(self, app: FastAPI):
         Connection.__init__(self)
         self.app = app
@@ -139,17 +145,17 @@ class XselConnection(Connection):
     def __str__(self) -> str:
         return "'xsel'"
 
-    async def write_item(self, topic: str, item: dict[str, str]):
+    async def write_item(self, topic: str, item: TopicData):
         opt = _selection_for_topic(topic)
-        data = item.get("data", {}).get("data", {})
+        data = item.value
         info(f"topic: {topic} opt: {opt}")
         if not opt:
             return
-        value: str | dict[str, str] = data.get("value", "")
-        value_type: str = data.get("type", "binary")
-        value_encoding: str = data.get("encoding", "base64")
+        value: str | dict[str, str] = data.value
+        value_type: str = data.value_type
+        value_encoding: str = data.value_encoding
         # compute bytes
-        data_bytes = b''
+        data_bytes = b""
         if value_type == "binary":
             if value_encoding == "base64":
                 data_bytes = _b64_decode(value)
@@ -197,13 +203,15 @@ class XselConnection(Connection):
         if current == state.applied:
             return
 
-        topic_data = make_topic_data(source=self,
-                                     topic=topic,
-                                     value=_b64(current),
-                                     type="binary",
-                                     encoding="base64",
-                                     app="xsel")
-        await enqueue_topic_data(self.app, topic_data)
+        await enqueue_topic_data(
+            self.app,
+            TopicData(
+                topic=topic,
+                source=self,
+                value=ValueData(value=_b64(current), type="binary", encoding="base64"),
+                meta={"app": "xsel"},
+            ),
+        )
 
     async def poller(self):
         interval = POLL_INTERVAL_MS / 1000.0
@@ -214,7 +222,7 @@ class XselConnection(Connection):
                 info(f"xsel got item: {item}")
                 # Drain any burst to reduce context switching
                 q.task_done()
-                topic = item.get("data", {}).get("data", {}).get("topic")
+                topic = item.topic
                 info(f"write_item start")
                 await self.write_item(topic, item)
                 info(f"write_item done")
@@ -227,15 +235,15 @@ class XselConnection(Connection):
 
             await self.read_items()
 
-    async def enqueue_topic_data(self, data):
-        info(f"enqueue_topic_data: {data}")
-        topic = data.get("data", {}).get("data", {}).get("topic")
+    async def enqueue_topic_data(self, topic_data: TopicData):
+        info(f"enqueue_topic_data: {topic_data}")
+        topic = topic_data.topic
         info(f"topic: {topic}")
         assert topic
         if not _selection_for_topic(topic):
             return
         try:
-            await self.queue.put(data)
+            await self.queue.put(topic_data)
         except a.QueueFull:
             trace("xsel queue full; dropping oldest")
             # drop oldest (best effort) and enqueue
@@ -264,25 +272,3 @@ def _selection_for_topic(topic: str) -> str | None:
     return TOPIC_TO_XSEL.get(topic)
 
 
-async def _health_check(app: FastAPI) -> None:
-    """Populate xsel health info in self.xsel_health and warn if bad."""
-    exists = os.path.exists(XSEL_PATH)
-    executable = os.access(XSEL_PATH, os.X_OK)
-    in_path = shutil.which(os.path.basename(XSEL_PATH)) is not None
-    results: dict[str, Any] = {
-        "path": XSEL_PATH,
-        "exists": exists,
-        "executable": executable,
-        "in_path": in_path,
-        "selections": {},
-    }
-    ok = exists and executable
-    if exists and executable:
-        for opt in ("-b", "-p", "-s"):
-            code, _, _ = await _exec(XSEL_PATH, opt, "-o")
-            results["selections"][opt] = {"read_ok": code == 0}
-            ok = ok and (code == 0)
-    results["ok"] = ok
-    self.health = results
-    if not ok:
-        print(f"[xsel] health check failed: {results}")

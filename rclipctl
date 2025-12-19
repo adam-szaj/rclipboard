@@ -137,8 +137,8 @@ make_publish_body()
     cat << EOF
 {
   "meta": {"app": "${app}"},
-  "data": {
-    "topic": "${topic}",
+  "topic": "${topic}",
+  "value": {
     "value": "${value}",
     "type": "binary",
     "encoding": "${enc}"
@@ -150,7 +150,7 @@ EOF
 call_clip()
 {
     local url
-    url=$(endpoint_url "/clip/${topic}")
+    url=$(endpoint_url "/clip")
     body=$(make_publish_body)
     echo "$body" | jq -c | curl "${CURL_SOCK_OPTS[@]}" -fsS \
         -X POST "$url" \
@@ -185,21 +185,20 @@ call_getclip()
     local url
     if [ "$json" = "1" ]; then
         url=$(endpoint_url "/clip/${topic}")
-        curl "${CURL_SOCK_OPTS[@]}" -fsS "$url" | tee resp.txt | jq -c
-        return
+        exec curl "${CURL_SOCK_OPTS[@]}" -fsS "$url" | jq -c
     fi
 
     # Non-JSON mode: fetch envelope internally, print value
-    url="${BASE}/clip/${topic}?json=1"
+    url="${BASE}/clip/${topic}"
     resp=$(curl "${CURL_SOCK_OPTS[@]}" -fsS "$url")
-    vtype=$(printf '%s' "$resp" | jq -r '.value.data.type // empty')
-    venc=$(printf '%s' "$resp" | jq -r '.value.data.encoding // empty')
+    vtype=$(printf '%s' "$resp" | jq -r '.value.type // empty')
+    venc=$(printf '%s' "$resp" | jq -r '.value.encoding // empty')
     # echo "vtype: ${vtype} venc: ${venc}"
     if [ "$vtype" != "binary" ]; then
-        printf '%s' "$resp" | jq -r '(.value.data | if type=="string" then . else @json end)'
+        printf '%s' "$resp" | jq -r '(.value.value | if type=="string" then . else @json end)'
         return
     else
-        val=$(printf '%s' "$resp" | jq -r '.value.data.value // empty')
+        val=$(printf '%s' "$resp" | jq -r '.value.value // empty')
         # echo "val: ${val}" >&2
         if [ -n "${encoding}" ] ; then encoded=1; fi
         if [ "${encoded}" = 1 ] ; then

@@ -1,31 +1,37 @@
-from pydantic import BaseModel, ConfigDict, Field, JsonValue
-from typing import Literal
-# from typing import Annotated, Literal
+from pydantic import BaseModel, Field, JsonValue
+from pydantic import ConfigDict
+
+# from typing import Literal
+from typing import Annotated, Literal, Required, TypeVar, Generic
 from abc import ABC, abstractmethod
+import asyncio as a
+from asyncio import Future, Transport
 
 
 class ValueData(BaseModel):
     value: str
-    value_type: str = Field(alias='type')
-    value_encoding: Literal['plain', 'hex', 'base64'] = Field(alias='encoding')
+    value_type: Literal["text", "binary", "path", "file"] = Field(
+        alias="type", default="text"
+    )
+    value_encoding: Literal["plain", "hex", "base64"] = Field(
+        alias="encoding", default="plain"
+    )
 
 
 class TopicData(BaseModel):
-    topic: str
-    source: str
-    value: ValueData
-    meta: dict[str, str]
+    topic: Annotated[str, Field(init=True)]
+    value: Annotated[ValueData, Field(init=True)]
+    meta: Annotated[dict[str, str], Field(init=True)]
 
-    # model_config = ConfigDict(arbitrary_types_allowed=True)
+    model_config = ConfigDict(arbitrary_types_allowed=True)
 
 
 class Connection(ABC):
-
     def __init__(self):
         pass
 
     @abstractmethod
-    async def enqueue_topic_data(self, data: TopicData):
+    async def enqueue_topic_data(self, data: "TopicData"):
         pass
 
     @abstractmethod
@@ -39,7 +45,28 @@ class Connection(ABC):
         return "conn"
 
 
-# class SerialFlowMessage(BaseModel):
+class InternalTopicData(ABC):
+    def __init__(self, data: TopicData, source: Connection | None):
+        self.data: TopicData = data
+        self.source: Connection|None = source
+
+    @property
+    def topic(self) -> str:
+        return self.data.topic
+
+
+PT = TypeVar("PT")
+RT = TypeVar("RT")
+
+
+class AppRequestMessage(Generic[PT, RT]):
+    def __init__(self, loop: a.AbstractEventLoop, action: str, data: PT) -> None:
+        self._action: str = action
+        self._future: a.Future[RT] = loop.create_future()
+        self.data: PT = data
+
+    def future(self) -> a.Future[RT]:
+        return self._future
 
 
 class Message(BaseModel):
@@ -47,36 +74,46 @@ class Message(BaseModel):
 
 
 class BroadcastMessage(Message):
-    type: Literal['broadcast']
-    action: Literal['event']
-    method: Literal['clip']
+    type: Literal["broadcast"]
+    action: Literal["event"]
+    method: Literal["clip"]
     value: TopicData
 
 
 class RequestMessage(Message):
-    type: Literal['request']
-    action: Literal['call']
-    method: Literal['clip', 'getclip', 'status', 'health']
+    type: Literal["request"] = "request"
+    action: Literal["call"] = "call"
+    mid: Annotated[int, Field(ge=0, default=0, alias="id")] = 0
+    method: Literal["clip", "getclip", "status", "health"]
     params: JsonValue
 
 
 class ResponseMessage(Message):
-    type: Literal['response']
-    action: Literal['return', 'error']
+    type: Literal["response"] = "response"
+    action: Literal["return"] = "return"
+    mid: Annotated[int, Field(ge=0, default=0, alias="id")] = 0
+    method: str
     value: JsonValue
 
 
+class ErrorMessage(Message):
+    type: Literal["response"] = "response"
+    action: Literal["error"] = "error"
+    mid: Annotated[int, Field(ge=0, default=0, alias="id")] = 0
+    error: JsonValue
+
+
 class SystemRequestMessage(Message):
-    type: Literal['system-request']
-    action: Literal['call']
-    method: Literal['subscribe', 'unsubscribe']
+    type: Literal["system-request"]
+    action: Literal["call"]
+    method: Literal["subscribe", "unsubscribe"]
     params: JsonValue
 
 
 class SystemResponseMessage(Message):
-    type: Literal['system-response']
-    action: Literal['return', 'error']
-    event: Literal['subscribed', 'unsubscribed']
+    type: Literal["system-response"]
+    action: Literal["return", "error"]
+    event: Literal["subscribed", "unsubscribed"]
     value: JsonValue
 
     # data: TopicData

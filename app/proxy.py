@@ -1,4 +1,5 @@
 from __future__ import annotations
+from messages import makeMessage, next_id
 from .app_state import enqueue_topic_data
 
 import asyncio as a
@@ -19,20 +20,20 @@ info = logger.info
 debug = logger.debug
 trace = logger.debug
 
-from messages import makeMessage, next_id
 
 DEFAULT_TOPICS = ["c", "p", "s"]
 
 
 class ProxyClient:
-
-    def __init__(self,
-                 app: FastAPI,
-                 *,
-                 url: str,
-                 unix: bool = False,
-                 path: str = "",
-                 topics: list[str] | None = None):
+    def __init__(
+        self,
+        app: FastAPI,
+        *,
+        url: str,
+        unix: bool = False,
+        path: str = "",
+        topics: list[str] | None = None,
+    ):
         self.app = app
         self.url = url
         self.path = path
@@ -61,9 +62,7 @@ class ProxyClient:
             "id": next_id(),
             "action": "call",
             "method": "clip",
-            "params": {
-                "data": items
-            },
+            "params": {"data": items},
             "meta": meta or {},
         }
         await self._send_json(payload)
@@ -87,14 +86,16 @@ class ProxyClient:
                             trace("proxy: failed to decode JSON from upstream")
                             continue
                         # Expect upstream broadcasts
-                        if msg.get("type") == "broadcast" and msg.get(
-                                "action") == "clip":
+                        if (
+                            msg.get("type") == "broadcast"
+                            and msg.get("action") == "clip"
+                        ):
                             data = msg.get("data")
                             items = data if isinstance(data, list) else [data]
                             data = {
                                 "source": "proxy_upstream",
                                 "meta": msg.get("meta", {}),
-                                "data_items": items
+                                "data_items": items,
                             }
                             await enqueue_topic_data(app, data)
             except Exception as e:
@@ -123,15 +124,16 @@ def install_proxy(app: FastAPI) -> None:
         return
     connection_params = _make_ws_url()
     # if not url:
-    #     debug("proxy disabled: invalid upstream configuration")
-    #     return
+    #    debug("proxy disabled: invalid upstream configuration")
+    #    return
     client = ProxyClient(app, **connection_params)
     app.state.proxy_client = client
     app.state.proxy_task = a.create_task(client.run(), name="proxy_upstream")
 
 
-async def on_local_clip(app: FastAPI, data_items: list[dict], meta: dict,
-                        source: Any) -> None:
+async def on_local_clip(
+    app: FastAPI, data_items: list[dict], meta: dict, source: Any
+) -> None:
     """
     Forward local publishes upstream when proxy is enabled,
     excluding upstream-originated ones.

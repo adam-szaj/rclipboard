@@ -1,40 +1,44 @@
-from json import JSONEncoder
-import json
-from fastapi import FastAPI
-from typing import Any
 import asyncio
-from .types import TopicData, Connection
+from abc import ABC, abstractmethod
 from logging import Logger
+from typing import Any, Generic, TypeVar, override
+
+from fastapi import FastAPI
 from app.log import get_logger
-from messages import utc_timestamp
+from .types import Connection, InternalTopicData, TopicData
 
 logger: Logger = get_logger(__name__)
 error = logger.error
 warning = logger.warning
 info = logger.info
 debug = logger.debug
-trace = logger.debug
+trace = logger.trace
+backtrace = logger.backtrace
+
+T = TypeVar("T")
 
 
-class Bus:
-
+class Bus(Generic[T]):
     def __init__(self, **kwargs):
-        self.q: asyncio.Queue[dict[str, Any]] = asyncio.Queue(**kwargs)
+        self.q: asyncio.Queue[T] = asyncio.Queue[T](**kwargs)
 
     def task_done(self):
         self.q.task_done()
 
     async def get_nowait(self):
-        return await self.q.get_nowait()
+        return self.q.get_nowait()
 
     async def get(self):
         return await self.q.get()
 
-    async def put(self, data: TopicData):
+    async def put(self, data: InternalTopicData):
         return await self.q.put(data)
 
-    async def put_nowait(self, data: TopicData):
-        return await self.q.put_nowait(data)
+    async def request(self, req):
+        pass
+
+    async def put_nowait(self, data: InternalTopicData):
+        return self.q.put_nowait(data)
 
 
 def make_dict(**kwargs) -> dict[str, object]:
@@ -42,24 +46,24 @@ def make_dict(**kwargs) -> dict[str, object]:
     return kwargs
 
 
-def make_topic_data(*, source: Connection, topic: str, value: str, type: str,
-                    encoding: str, app: str):
-    return make_dict(source=source,
-                     topic=topic,
-                     value=make_dict(value=value, type=type,
-                                     encoding=encoding),
-                     meta=make_dict(app=app))
+def make_topic_data(
+    *, source: Connection, topic: str, value: str, type: str, encoding: str, app: str
+):
+    return make_dict(
+        source=source,
+        topic=topic,
+        value=make_dict(value=value, type=type, encoding=encoding),
+        meta=make_dict(app=app),
+    )
 
 
 class AppState:
-
     def __init__(self, app: FastAPI):
-        self.bus: Bus = Bus()
+        self.bus: Bus = Bus[Any]()
         self.clients: list[Connection] = []
         self.topic_content: dict[str, object] = {}
         self.subs: dict[str, set[Connection]] = {}
-        self.dispatcher_task = asyncio.create_task(self.dispatcher(),
-                                                   name="dispatcher")
+        self.dispatcher_task = asyncio.create_task(self.dispatcher(), name="dispatcher")
 
     def subsctibe_client(self, client: Connection, topics: list[str]):
         for topic in topics:
@@ -80,122 +84,135 @@ class AppState:
             except RuntimeError as e:
                 error(f"fail: {e}")
 
-    async def _proces_data_item(self, item: TopicData):
-        data0 = item.get("data", {})
-        data = data0.get("data")
-        info(f"_proces_data_item data0: {data0}")
-        topic: str | None = data.get("topic")
-        if not topic:
-            warning("no topic found")
-            return
-        else:
-            info(f"topic: '{topic}'")
+    class SerialCall(ABC):
+        def __init__(self):
+            self._future = asyncio.Future()
 
-        self.topic_content[topic] = data0
-        await self._dispatch_data_item(topic, item)
+        def future(self) -> asyncio.Future:
+            return self._future
 
-    def make_broadcast_clip(self,
-                            data: dict | list[dict],
-                            meta: dict | None = None,
-                            ts: Any = None) -> dict[str, object]:
-        """Create a broadcast/clip envelope with DataItem(s)."""
-        return make_dict(
-            type="broadcast",
-            action="clip",
-            data=data,
-            meta=meta or {},
-            ts=ts or utc_timestamp(),
-        )
+        @abstractmethod
+        async def do_call(self, app: "AppState"):
+            pass
 
-    async def _dispatch_data_item(self, topic: str, item: TopicData):
-        subs: set[Connection] | None = self.subs.get(topic)
+        async def call(self, app: "AppState"):
+            try:
+                result = await self.do_call(app)
+                self._future.set_result(result)
+            except Exception as e:
+                self._future.set_exception(e)
+
+    class SetTopicData(SerialCall):
+        def __init__(self, topic_data: InternalTopicData):
+            super().__init__()
+            self.topic_data = topic_data
+
+        @override
+        async def do_call(self, app: "AppState"):
+            info(f"put item: '{self.topic_data}'")
+            await app._proces_put_item(self.topic_data)
+
+    class GetTopicData(SerialCall):
+        def __init__(self, topic: str):
+            super().__init__()
+            self.topic: str = topic
+
+        @override
+        async def do_call(self, app: "AppState"):
+            return await app._proces_get_item("topic", self.topic)
+
+    async def _proces_data_item(self, topic_data: InternalTopicData):
+        assert isinstance(topic_data, InternalTopicData)
+
+        self.topic_content[topic_data.topic] = topic_data
+
+    async def _dispatch_data_item(self, topic_data: InternalTopicData):
+        subs: set[Connection] | None = self.subs.get(topic_data.topic)
         info(f"subs: {subs}")
         if not subs:
             return
-        payload = TopicData(
-            self.make_broadcast_clip(data=item.get("data"),
-                                     meta=item.get("meta")))
-        source = item.get("data", {}).get("source")
-        info(f"dispatch source: {source} payload: {payload}")
+        info(f"dispatch topic_data: {topic_data}")
+        source = topic_data.source
         for conn in subs:
-            if source is not None and conn is source:
+            if source and str(conn) == source:
                 continue
-            await conn.enqueue_topic_data(payload)
+            await conn.enqueue_topic_data(topic_data)
 
-    async def _proces_put_item(self, topic_data: TopicData):
+    async def _proces_put_item(self, topic_data: InternalTopicData):
         # Update content store and fan-out
         await self._proces_data_item(topic_data)
+        await self._dispatch_data_item(topic_data)
 
-    async def _proces_get_item(self, subject: str, item: dict[str, object]):
-        try:
-            fut: asyncio.Future = item.get("future")
-            info(f"fut: {fut}")
-            assert fut
-            content = {"message": "none"}
-            if subject == "topic":
-                topic = item.get("data")
-                info(f"topic: {topic}")
-                assert topic
-                content = self.topic_content.get(topic)
-                info(
-                    f"found content for topic: {content} from:\n{self.topic_content}"
-                )
-            elif subject == "topics":
-                content = self.topic_content.keys()
-            else:
-                content = {
-                    "message": f"unsupported request subject: '{subject}'"
-                }
-            trace(f"set result to content: '{content}'")
-            fut.set_result(content)
-            trace(f"set result to content: '{content}' done")
-        except Exception as e:
-            error(f'set exception: {type(e)}')
-            fut.set_exception(e)
+    async def _proces_get_item(self, subject: str, topic: str):
+        info(f"subject: '{subject}' topic: '{topic}'")
+        if subject == "topic":
+            assert topic
+            content = self.topic_content.get(topic, "")
+            info(
+                f"found content for topic '{topic}': '{content}' from: '{
+                    self.topic_content
+                }'"
+            )
+        elif subject == "topics":
+            content = self.topic_content.keys()
+        else:
+            content = {"message": f"unsupported request subject: '{subject}'"}
+        return content
 
     async def process_queue(self):
         info("wait for item")
         try:
-            item = await self.bus.get()
+            item: SerialCall = await self.bus.get()
             info(f"got item: {item}")
             self.bus.task_done()
-            action: str = item.get("action")
-            if action and action == "put":
-                info(f"put item: {item}")
-                payload = item.get("payload")
-                await self._proces_put_item(payload)
-            elif action and action.startswith("get:"):
-                _, subject = action.split(":")
-                payload = item.get("payload")
-                trace(f"get subject: {subject} payload: {payload}")
-                await self._proces_get_item(subject, payload)
-            else:
-                raise RuntimeError(f"unknown action: {action}")
+            await item.call(self)
+        except AssertionError as e:
+            tb = e.__traceback__
+            while tb:
+                error(f"{tb.tb_frame}:{tb.tb_lineno}")
+                tb = tb.tb_next
+            error(f"AssertionError: {e.args}")
+            raise
         except Exception as e:
-            error(f"Exception '{type(e)}': {e}")
+            tb = e.__traceback__
+            while tb:
+                error(f"{tb.tb_frame}:{tb.tb_lineno}")
+                tb = tb.tb_next
+            error(f"Exception '{type(e)}': '{e}'")
+            raise
 
         print("process_queue: done.. ")
 
-    async def enqueue_request(self, action: str, data=None):
+    async def enqueue_request(self, action: str, data: T) -> TopicData | None:
+        print(f"action: {action} data: {data}")
+
         loop = self.dispatcher_task.get_loop()
-        fut = loop.create_future()
-        trace("put request")
-        await self.bus.put({
-            "action": action,
-            "payload": {
-                "data": data,
-                "future": fut
-            }
-        })
-        trace("wait for future")
+        if action.startswith("get:"):
+            topic = action.split(":")[1]
+            req = self.GetTopicData(data)
 
-        return await fut
+            trace(f"put request: {req}")
+            await self.bus.put(req)
+            trace("wait for future")
 
-    async def enqueue_topic_data(self, data):
-        await self.bus.put({"action": "put", "payload": data})
+            await req.future()
+            internal_topic_data: InternalTopicData = req.future().result()
+            if internal_topic_data:
+                return internal_topic_data.data
+        else:
+            raise ValueError("Bad request")
+        return None
 
-    async def enqueue_topic_data_nowait(self, data):
-        await self.bus.put_nowait({"action": "put", "payload": data})
+
+    async def enqueue_topic_data(self, data: InternalTopicData):
+        info(f"data: {data}")
+        req = self.SetTopicData(data)
+        await self.bus.put(req)
+        await req.future()
+
+    async def enqueue_topic_data_nowait(self, data: InternalTopicData):
+        info(f"data: {data}")
+        await self.bus.put_nowait(self.SetTopicData(data))
 
 
 def subsctibe_client(app: FastAPI, client: Connection, topics: list[str]):
@@ -214,18 +231,22 @@ async def enqueue_request_topics(app: FastAPI):
     return await app.state.main.enqueue_request("get:topics")
 
 
-async def enqueue_request_topic(app: FastAPI, topic: str):
+async def enqueue_request_topic(app: FastAPI, topic: str) -> TopicData | None:
     return await app.state.main.enqueue_request("get:topic", topic)
 
 
-async def enqueue_topic_request(app: FastAPI, topic: str):
+async def enqueue_topic_request(app: FastAPI, topic: str) -> TopicData | None:
     return await enqueue_request_topic(app, topic)
 
 
-async def enqueue_topic_data(app: FastAPI, data: TopicData):
+async def enqueue_topic_data(app: FastAPI, data: TopicData, source: Connection | None) :
     info(f"data: {data}")
-    return await app.state.main.enqueue_topic_data(data)
+    internal_topic_data = InternalTopicData(data=data, source=source)
+    await app.state.main.enqueue_topic_data(internal_topic_data)
+    return internal_topic_data
 
 
-async def enqueue_topic_data_nowait(app: FastAPI, data: TopicData):
-    return await app.state.main.enqueue_topic_data_nowait(data)
+async def enqueue_topic_data_nowait(app: FastAPI, data: TopicData, source: Connection | None):
+    internal_topic_data = InternalTopicData(data=data, source=source)
+    await app.state.main.enqueue_topic_data_nowait(internal_topic_data)
+    return internal_topic_data

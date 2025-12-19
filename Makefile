@@ -71,6 +71,7 @@ run-dev:
 	RCLIPBOARD_PROXY_ADDR=$(UPSTREAM_HOST) \
 	RCLIPBOARD_PROXY_PORT=$(UPSTREAM_PORT) \
 	RCLIPBOARD_PROXY_UDS=$(UPSTREAM_UDS) \
+	RCLIPBOARD_XSEL=0 \
 	uvicorn app.main:app --host $(HOST) --port $(PORT) --log-level $(LOG_LEVEL) --reload
 
 
@@ -82,7 +83,14 @@ run-test-dev:
 	RCLIPBOARD_PROXY_ADDR=$(UPSTREAM_HOST) \
 	RCLIPBOARD_PROXY_PORT=$(UPSTREAM_TEST_PORT) \
 	RCLIPBOARD_PROXY_UDS=$(UPSTREAM_UDS) \
+	RCLIPBOARD_XSEL=0 \
 	uvicorn app.main:app --host $(HOST) --port $(TEST_PORT) --log-level $(LOG_LEVEL) --reload
+
+run-smoke-clip:
+	date | ./rclipctl clip -c --host $(HOST) --port $(TEST_PORT) --uds ""
+
+run-smoke-get:
+	./rclipctl getclip -c --host $(HOST) --port $(TEST_PORT) --uds ""
 
 run-smoke-test:
 	date | ./rclipctl clip -c --host $(HOST) --port $(TEST_PORT) --uds ""
