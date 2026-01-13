@@ -149,6 +149,7 @@ EOF
 
 call_clip()
 {
+    set -x
     local url
     url=$(endpoint_url "/clip")
     body=$(make_publish_body)

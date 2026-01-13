@@ -1,17 +1,17 @@
 from __future__ import annotations
-from messages import makeMessage, next_id
-from .app_state import enqueue_topic_data
 
 import asyncio as a
 import json
 import os
+from logging import Logger
 from typing import Any
 
 from fastapi import FastAPI
 from websockets.asyncio.client import connect
 
-from logging import Logger
-from .log import get_logger
+from app.app_state import enqueue_topic_data
+from app.log import get_logger
+from messages import next_id
 
 logger: Logger = get_logger(__name__)
 error = logger.error
@@ -20,11 +20,11 @@ info = logger.info
 debug = logger.debug
 trace = logger.debug
 
-
 DEFAULT_TOPICS = ["c", "p", "s"]
 
 
 class ProxyClient:
+
     def __init__(
         self,
         app: FastAPI,
@@ -62,7 +62,9 @@ class ProxyClient:
             "id": next_id(),
             "action": "call",
             "method": "clip",
-            "params": {"data": items},
+            "params": {
+                "data": items
+            },
             "meta": meta or {},
         }
         await self._send_json(payload)
@@ -86,10 +88,8 @@ class ProxyClient:
                             trace("proxy: failed to decode JSON from upstream")
                             continue
                         # Expect upstream broadcasts
-                        if (
-                            msg.get("type") == "broadcast"
-                            and msg.get("action") == "clip"
-                        ):
+                        if msg.get("type") == "broadcast" and msg.get(
+                                "action") == "clip":
                             data = msg.get("data")
                             items = data if isinstance(data, list) else [data]
                             data = {
@@ -131,9 +131,8 @@ def install_proxy(app: FastAPI) -> None:
     app.state.proxy_task = a.create_task(client.run(), name="proxy_upstream")
 
 
-async def on_local_clip(
-    app: FastAPI, data_items: list[dict], meta: dict, source: Any
-) -> None:
+async def on_local_clip(app: FastAPI, data_items: list[dict], meta: dict,
+                        source: Any) -> None:
     """
     Forward local publishes upstream when proxy is enabled,
     excluding upstream-originated ones.

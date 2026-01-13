@@ -1,103 +1,69 @@
 from __future__ import annotations
-import copy
-from pydantic import BaseModel
-
-from app.types import TopicData, InternalTopicData, RequestMessage, ResponseMessage
-from .log import get_logger
-from .app_state import (
-    enqueue_topic_data,
-    enqueue_request_topic,
-    enqueue_request_topics,
-)
-
-from typing import Any
-import json as j
-
-from fastapi import FastAPI, Query
-from fastapi import HTTPException
-from messages import (
-    next_id,
-)
-
-from logging import Logger
-from .log import get_logger
 
 import sys
+from typing import override
+
+from fastapi import FastAPI, HTTPException, Request
+
+from app.types import TopicData
+
+from .app_state import enqueue_request_topic, enqueue_request_topics, enqueue_topic_data
+from .log import get_logger
+from .types import Connection
 
 current_module = sys.modules[__name__]
 
-logger: Logger = get_logger(__name__)
-error = logger.error
-warning = logger.warning
-info = logger.info
-debug = logger.debug
-trace = logger.debug
+error = (get_logger(__name__)).error
+warning = (get_logger(__name__)).warning
+info = (get_logger(__name__)).info
+debug = (get_logger(__name__)).debug
+trace = (get_logger(__name__)).debug
+if hasattr(get_logger(__name__), "trace"):
+    trace = getattr(get_logger(__name__), "trace")
 
 
-async def status(app: FastAPI) -> dict[str, Any]:
-    topics = []
-    # clients = sum(len(s) for s in app.state.subs.values())
-    # xsel_info = {
-    #    "enabled": getattr(app.state, "xsel_enabled", False),
-    #    "path": getattr(app.state, "xsel_config", {}).get("path"),
-    #    "interval_ms": getattr(app.state, "xsel_config",
-    #                     {}).get("interval_ms"),
-    #    "last_poll_ts": getattr(app.state, "xsel_last_poll_ts", None),
-    #    "last_seen_ts": getattr(app.state, "xsel_last_seen_ts", {}),
-    #    "last_applied_ts": getattr(app.state, "xsel_last_applied_ts", {}),
-    #    "health": getattr(app.state, "xsel_health", None),
-    # }
-    return {"ok": True, "topics": [], "clients": [], "xsel": {}}
+class HTTPConnection(Connection):
+
+    @property
+    @override
+    def name(self) -> str:
+        return "http"
+
+    @override
+    async def send(self, data: object):
+        pass
 
 
-async def topics(app: FastAPI) -> dict[str, Any]:
-    return {"topics": sorted(await enqueue_request_topics(app))}
+def install_http_handlers(app: FastAPI):
 
-
-async def get_clip(
-    app: FastAPI, topic: str
-) -> TopicData:
-    info("before enqueue_request_topic")
-    content: TopicData | None = await enqueue_request_topic(app, topic)
-    info(f"after enqueue_request_topic: {content}")
-    if content is None:
-        raise HTTPException(status_code=404)
-    return content
-
-
-async def clip(
-    app: FastAPI,
-    data: TopicData,
-) -> TopicData:
-    await enqueue_topic_data(app, data=data, source=None)
-    return data
-
-
-def install_http_handlers(app: FastAPI) -> None:
     @app.get("/health")
-    async def _health():
-        xh = getattr(app.state, "xsel_health", None) or {}
-        xsel_ok = bool(xh.get("ok", False)) if isinstance(xh, dict) else False
-        proxy_client = getattr(app.state, "proxy_client", None)
-        proxy_connected = bool(getattr(proxy_client, "connected", False))
-        return {"ok": True, "xsel_ok": xsel_ok, "proxy_connected": proxy_connected}
+    async def _health(request: Request):
+        info(f"request from: {request.client}")
+        return "OK"
 
     @app.get("/status")
-    async def _status():
-        return await status(app)
+    async def _get_status(request: Request):
+        info(f"request from: {request.client}")
+        return {"ok": True, "topics": [], "clients": [], "xsel": {}}
 
     @app.get("/topics")
-    async def _topics():
-        return await topics(app)
+    async def _get_topics(request: Request):
+        info(f"request from: {request.client}")
+        jls_extract_var = {
+            "topics": list(sorted(await enqueue_request_topics(app) or []))
+        }
+        return jls_extract_var
 
     @app.get("/clip/{topic}", response_model=TopicData)
-    async def a_get_clip(
-        topic: str,
-    ) -> TopicData:
-        debug(f"calling get_clip topic: {topic}")
-        return await get_clip(app, topic)
+    async def _get_clip(topic: str, request: Request) -> TopicData:
+        info(f"request from: {request.client}")
+        content: TopicData | None = await enqueue_request_topic(app, topic)
+        if content is None:
+            raise HTTPException(status_code=404)
+        return content
 
     @app.post("/clip", response_model=TopicData)
-    async def _clip(body: TopicData):
-        info(f"body: {body}")
-        return await clip(app, body)
+    async def _post_clip(body: TopicData, request: Request):
+        info(f"request from: {request.client}")
+        _ = await enqueue_topic_data(app, data=body, source=None)
+        return body

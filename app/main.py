@@ -1,18 +1,16 @@
 from __future__ import annotations
-from contextlib import asynccontextmanager
-from app.app_state import AppState
+
 import asyncio
 import os
+from contextlib import asynccontextmanager
+from logging import Logger
 
 from fastapi import FastAPI
-from .app_state import AppState
-from . import http as http_mod
-from . import ws as ws_mod
-from . import xsel as xsel_mod
-from . import proxy as proxy_mod
 
-from logging import Logger
-from .log import get_logger
+import app.http as http_mod
+import app.ws as ws_mod
+from app.app_state import AppState
+from app.log import get_logger
 
 logger: Logger = get_logger(__name__)
 error = logger.error
@@ -26,12 +24,13 @@ async def startup(app: FastAPI):
     app.state.main = AppState(app)
     # HTTP routes
     http_mod.install_http_handlers(app)
+    # app.add_route("/", http_router)
 
     # WS route
     ws_mod.install_ws(app)
 
     # optional xsel poller
-    xsel_mod.install_xsel(app)
+    # xsel_mod.install_xsel(app)
     # optional proxy
     # proxy_mod.install_proxy(app)
 

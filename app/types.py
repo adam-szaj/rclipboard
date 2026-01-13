@@ -1,21 +1,35 @@
-from pydantic import BaseModel, Field, JsonValue
-from pydantic import ConfigDict
-
-# from typing import Literal
-from typing import Annotated, Literal, Required, TypeVar, Generic
-from abc import ABC, abstractmethod
 import asyncio as a
-from asyncio import Future, Transport
+from abc import ABC, abstractmethod
+from typing import Annotated, Generic, Literal, TypeVar, override
+
+from pydantic import BaseModel, ConfigDict, Field, JsonValue
+
+
+class Connection(ABC):
+
+    def __init__(self):
+        pass
+
+    @property
+    @abstractmethod
+    def name(self) -> str:
+        pass
+
+    @abstractmethod
+    async def send(self, data: object):
+        pass
+
+    @override
+    def __repr__(self) -> str:
+        return f"Connection[{self.name}]"
 
 
 class ValueData(BaseModel):
     value: str
-    value_type: Literal["text", "binary", "path", "file"] = Field(
-        alias="type", default="text"
-    )
-    value_encoding: Literal["plain", "hex", "base64"] = Field(
-        alias="encoding", default="plain"
-    )
+    value_type: Literal["text", "binary", "path",
+                        "file"] = Field(alias="type", default="text")
+    value_encoding: Literal["plain", "hex", "base64"] = Field(alias="encoding",
+                                                              default="plain")
 
 
 class TopicData(BaseModel):
@@ -26,29 +40,51 @@ class TopicData(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
 
-class Connection(ABC):
-    def __init__(self):
-        pass
+class Health(BaseModel):
+    ok: bool
+    http_enabled: bool
+    http_good: bool
+    xsel_enabled: bool
+    xsel_good: bool
+    ws_enabled: bool
+    ws_good: bool
+    uds_enabled: bool
+    uds_good: bool
+    pass
 
-    @abstractmethod
-    async def enqueue_topic_data(self, data: "TopicData"):
-        pass
 
-    @abstractmethod
-    async def send(self, data: dict[str, object]):
-        pass
+class HTTPStatus(BaseModel):
+    enabled: bool
+    good: bool
+    bind_address: str
+    bind_port: int
 
-    def __repr__(self) -> str:
-        return "conn"
 
-    def __str__(self) -> str:
-        return "conn"
+class WSStatus(BaseModel):
+    enabled: bool
+    good: bool
+    bind_address: str
+    bind_port: int
+    endpoint: str
+
+
+class XselStatus(BaseModel):
+    enabled: bool
+    good: bool
+
+
+class StatusData(BaseModel):
+    health: Health
+    http_status: HTTPStatus
+    ws_status: WSStatus
+    xsel_status: XselStatus
 
 
 class InternalTopicData(ABC):
+
     def __init__(self, data: TopicData, source: Connection | None):
         self.data: TopicData = data
-        self.source: Connection|None = source
+        self.source: Connection | None = source
 
     @property
     def topic(self) -> str:
@@ -60,7 +96,9 @@ RT = TypeVar("RT")
 
 
 class AppRequestMessage(Generic[PT, RT]):
-    def __init__(self, loop: a.AbstractEventLoop, action: str, data: PT) -> None:
+
+    def __init__(self, loop: a.AbstractEventLoop, action: str,
+                 data: PT) -> None:
         self._action: str = action
         self._future: a.Future[RT] = loop.create_future()
         self.data: PT = data

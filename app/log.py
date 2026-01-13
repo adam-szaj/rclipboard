@@ -21,11 +21,9 @@ def backtrace(self: logging.Logger, e: Exception, *args, **kws):
 
 
 logging.Logger.trace = trace  # type: ignore[attr-defined]
-logging.Logger.backtrace = backtrace
+setattr(logging.Logger, "backtrace", backtrace)
 
-FORMAT = (
-    "%(levelname)s * [%(taskName)s] %(filename)s:%(lineno)d:%(funcName)s: %(message)s"
-)
+FORMAT = "%(levelname)s * [%(taskName)s] %(filename)s:%(lineno)d:%(funcName)s: %(message)s"
 
 
 def get_logger(name: str) -> logging.Logger:
@@ -33,7 +31,7 @@ def get_logger(name: str) -> logging.Logger:
     # Optionally set level from env if not configured
     level = os.environ.get("RCLIPBOARD_PY_LOG_LEVEL")
     if level and not logger.handlers:
-        logging.basicConfig(
-            level=getattr(logging, level.upper(), logging.INFO), format=FORMAT
-        )
+        logging.basicConfig(level=getattr(logging, level.upper(),
+                                          logging.INFO),
+                            format=FORMAT)
     return logger

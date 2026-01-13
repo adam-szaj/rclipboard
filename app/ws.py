@@ -4,12 +4,9 @@ import asyncio as a
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 
-from messages import (
-    makeResponse,
-    makeResponseError,
-    makeSystemResponse,
-    normalize_data_items,
-)
+from messages import (makeResponse, makeResponseError, makeSystemResponse,
+                      normalize_data_items)
+
 from .app_state import Connection, enqueue_topic_data
 from .log import get_logger as gl
 
@@ -18,18 +15,20 @@ error = logger.error
 warning = logger.warning
 info = logger.info
 debug = logger.debug
-trace = logger.trace
+trace = logger.debug
 
 
 class WSConnection(Connection):
+
     def __init__(self, app: FastAPI, ws: WebSocket):
+        super().__init__()
         info(f"new connection app: {app}")
         self.app = app
         self.ws = ws
         self.q: a.Queue = a.Queue()
         self.topics: set[str] = set()
 
-    async def send(self, payload: dict):
+    async def send(self, payload: object):
         await self.ws.send_json(payload)
 
 
@@ -45,7 +44,8 @@ def _subscribe(app: FastAPI, conn: Connection, topics: list[str]) -> list[str]:
     return added
 
 
-def _unsubscribe(app: FastAPI, conn: Connection, topics: list[str]) -> list[str]:
+def _unsubscribe(app: FastAPI, conn: Connection,
+                 topics: list[str]) -> list[str]:
     removed: list[str] = []
     for t in list(topics):
         subs = app.state.subs.get(t)
@@ -78,10 +78,13 @@ async def _handler(app: FastAPI, conn: Connection, msg: dict) -> dict | None:
         if action == "unsubscribe":
             topics = msg.get("topics", [])
             removed = _unsubscribe(app, conn, topics)
-            return makeSystemResponse(msg, event="unsubscribed", topics=removed)
+            return makeSystemResponse(msg,
+                                      event="unsubscribed",
+                                      topics=removed)
         if action == "ping":
             return makeSystemResponse(msg, event="pong")
-        return makeResponseError(msg, {"message": f"unknown system action: {action}"})
+        return makeResponseError(
+            msg, {"message": f"unknown system action: {action}"})
 
     if mtype == "request" and msg.get("action") == "call":
         method = msg.get("method")
@@ -98,10 +101,12 @@ async def _handler(app: FastAPI, conn: Connection, msg: dict) -> dict | None:
         if method == "get":
             topic = msg.get("params", {}).get("topic")
             if not topic:
-                return makeResponseError(msg, {"message": "params.topic is required"})
+                return makeResponseError(
+                    msg, {"message": "params.topic is required"})
             value = app.state.topic_content.get(topic)
             if value is None:
-                return makeResponseError(msg, {"message": f"topic '{topic}' not found"})
+                return makeResponseError(
+                    msg, {"message": f"topic '{topic}' not found"})
             return makeResponse(msg, value=value)
         return makeResponseError(msg, {"message": f"unknown method: {method}"})
 
@@ -110,10 +115,12 @@ async def _handler(app: FastAPI, conn: Connection, msg: dict) -> dict | None:
         # Could be logged/forwarded if needed
         return None
 
-    return makeResponseError(msg, {"message": f"unknown message type: {mtype}"})
+    return makeResponseError(msg,
+                             {"message": f"unknown message type: {mtype}"})
 
 
 def install_ws(app: FastAPI) -> None:
+
     @app.websocket("/ws")
     async def ws_endpoint(ws: WebSocket):
         await ws.accept()

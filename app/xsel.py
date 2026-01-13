@@ -3,24 +3,16 @@ from __future__ import annotations
 import asyncio as a
 import base64
 import os
-from typing import Any
-import shutil
-import json
+from logging import Logger
+from pathlib import Path
+
+from fastapi import FastAPI
 
 # from asyncio.timeouts import timeout
-from .app_state import (
-    enqueue_topic_data,
-    register_client,
-    make_topic_data,
-    subsctibe_client,
-)
-from .types import TopicData, Connection, ValueData
-from fastapi import FastAPI
+from app.app_state import enqueue_topic_data, register_client, subsctibe_client
+from app.log import get_logger
+from app.types import Connection, TopicData, ValueData
 from messages import utc_timestamp
-
-from logging import Logger
-from .log import get_logger
-from pathlib import Path
 
 logger: Logger = get_logger(__name__)
 error = logger.error
@@ -35,7 +27,9 @@ XSEL_ENABLED: bool = os.environ.get("RCLIPBOARD_XSEL", "1") not in (
     "false",
     "False",
 )
-POLL_INTERVAL_MS: int = int(os.environ.get("RCLIPBOARD_XSEL_INTERVAL_MS", "500"))
+
+POLL_INTERVAL_MS: int = int(
+    os.environ.get("RCLIPBOARD_XSEL_INTERVAL_MS", "500"))
 
 # Topic to xsel option mapping
 TOPIC_TO_XSEL = {
@@ -53,7 +47,10 @@ def _b64_decode(s: str) -> bytes:
 
 
 async def _exec(
-    *args: str, input_data: bytes | None = None, timeout: float = 5.0
+    exec: Path,
+    *args: str,
+    input_data: bytes | None = None,
+    timeout: float = 5.0,
 ) -> tuple[int, bytes, bytes]:
     """Run a process with optional stdin and a timeout.
 
@@ -63,6 +60,7 @@ async def _exec(
     # Ensure X env is propagated
     env = os.environ.copy()
     proc = await a.create_subprocess_exec(
+        exec,
         *args,
         stdin=a.subprocess.PIPE if input_data is not None else None,
         stdout=None if input_data is not None else a.subprocess.PIPE,
@@ -71,12 +69,16 @@ async def _exec(
     )
     try:
         if input_data is None:
-            stdout, stderr = await a.wait_for(proc.communicate(), timeout=timeout)
+            stdout, stderr = await a.wait_for(proc.communicate(),
+                                              timeout=timeout)
         else:
             stdout, stderr = await a.wait_for(
-                proc.communicate(input=input_data), timeout=timeout
-            )
-        return proc.returncode, stdout or b"", stderr or b""
+                proc.communicate(input=input_data), timeout=timeout)
+        return (
+            proc.returncode if proc.returncode is not None else -1,
+            stdout or b"",
+            stderr or b"",
+        )
     except a.TimeoutError:
         try:
             proc.terminate()
@@ -92,7 +94,7 @@ async def read_selection(opt: str, timeout: float) -> bytes:
     if not os.environ.get("DISPLAY"):
         trace("xsel read_selection skipped: no DISPLAY")
         return b""
-    code, out, err = await _exec(XSEL_PATH, opt, "-o", timeout=timeout)
+    code, out, _ = await _exec(XSEL_PATH, opt, "-o", timeout=timeout)
     if code != 0:
         return b""
     return out
@@ -108,6 +110,7 @@ async def write_selection(opt: str, data: bytes, timeout: float) -> None:
 
 
 class XselState:
+
     def __init__(self, selection: str, opt: str):
         self.selection: str = selection
         self.opt: str = opt
@@ -119,6 +122,7 @@ class XselState:
 
 
 class XselConnection(Connection):
+
     def __init__(self, app: FastAPI):
         Connection.__init__(self)
         self.app = app
@@ -142,7 +146,8 @@ class XselConnection(Connection):
     def __repr__(self) -> str:
         return "'xsel'"
 
-    def __str__(self) -> str:
+    @property
+    def name(self) -> str:
         return "'xsel'"
 
     async def write_item(self, topic: str, item: TopicData):
@@ -162,14 +167,12 @@ class XselConnection(Connection):
             elif value_encoding == "hex":
                 data_bytes = bytes.fromhex(value)
         else:
-            if isinstance(value, str):
-                data_bytes = value.encode()
-            else:
-                data_bytes = json.dumps(value, separators=(",", ":")).encode()
+            assert isinstance(value, str)
+            data_bytes = value.encode()
 
         info(f"write_selection start: {data_bytes}")
         await write_selection(opt, data_bytes, timeout=2.5)
-        info(f"write_selection done")
+        info("write_selection done")
 
         # remember last applied and seen
         ts = utc_timestamp()
@@ -207,10 +210,12 @@ class XselConnection(Connection):
             self.app,
             TopicData(
                 topic=topic,
-                source=self,
-                value=ValueData(value=_b64(current), type="binary", encoding="base64"),
+                value=ValueData(value=_b64(current),
+                                type="binary",
+                                encoding="base64"),
                 meta={"app": "xsel"},
             ),
+            source=self,
         )
 
     async def poller(self):
@@ -223,9 +228,9 @@ class XselConnection(Connection):
                 # Drain any burst to reduce context switching
                 q.task_done()
                 topic = item.topic
-                info(f"write_item start")
+                info("write_item start")
                 await self.write_item(topic, item)
-                info(f"write_item done")
+                info("write_item done")
 
             except a.TimeoutError:
                 # trace("xsel poller write wait timeout")
@@ -235,24 +240,6 @@ class XselConnection(Connection):
 
             await self.read_items()
 
-    async def enqueue_topic_data(self, topic_data: TopicData):
-        info(f"enqueue_topic_data: {topic_data}")
-        topic = topic_data.topic
-        info(f"topic: {topic}")
-        assert topic
-        if not _selection_for_topic(topic):
-            return
-        try:
-            await self.queue.put(topic_data)
-        except a.QueueFull:
-            trace("xsel queue full; dropping oldest")
-            # drop oldest (best effort) and enqueue
-            try:
-                self.queue.get_nowait()
-                self.queue.task_done()
-            except a.QueueEmpty:
-                trace("xsel queue empty while dropping oldest")
-
     async def send(self, data: dict[str, object]):
         pass
 
@@ -260,15 +247,8 @@ class XselConnection(Connection):
 def install_xsel(app: FastAPI) -> None:
     conn = XselConnection(app)
     register_client(app, conn)
-    subsctibe_client(app, conn, TOPIC_TO_XSEL.keys())
-
-
-def _topic_for_selection(opt: str) -> str | None:
-    rev = {v: k for k, v in TOPIC_TO_XSEL.items()}
-    return rev.get(opt)
+    subsctibe_client(app, conn, list(TOPIC_TO_XSEL.keys()))
 
 
 def _selection_for_topic(topic: str) -> str | None:
     return TOPIC_TO_XSEL.get(topic)
-
-
