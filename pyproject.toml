@@ -1,0 +1,18 @@
+[tool.pyright]
+typeCheckingMode = "basic"
+autoImportCompletions = true
+useLibraryCodeForTypes = true
+
+[tool.ruff]
+line-length = 100
+extend-ignore = ["N802", "N803", "N806"]
+target-version = "py310"
+
+[tool.yapf]
+based_on_style = "pep8"
+indent_width = 3
+column_limit = 100
+
+[tool.isort]
+line_length = 100
+indent = "   "
