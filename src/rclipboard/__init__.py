@@ -1,0 +1,65 @@
+import argparse
+import asyncio
+import contextlib
+import os
+import signal
+
+import uvicorn
+
+from rclipboard.helpers import bind_endpoint_from_env, fifo_dir_from_env
+from rclipboard.main import create_app, shutdown, startup
+
+
+async def _run_fifo_server() -> None:
+    app = create_app()
+    stop_event = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        with contextlib.suppress(NotImplementedError):
+            loop.add_signal_handler(sig, stop_event.set)
+    await startup(app)
+    try:
+        await stop_event.wait()
+    finally:
+        await shutdown(app)
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(prog="rclipboard")
+    parser.add_argument("--fd", type=int, default=None)
+    args = parser.parse_args()
+
+    endpoint = bind_endpoint_from_env()
+    fifo_dir = fifo_dir_from_env()
+    ssl_certfile = os.environ.get("RCLIPBOARD_SSL_CERTFILE")
+    ssl_keyfile = os.environ.get("RCLIPBOARD_SSL_KEYFILE")
+    ssl_keyfile_password = os.environ.get("RCLIPBOARD_SSL_KEYFILE_PASSWORD")
+    if endpoint.scheme in {"ws", "wss"}:
+        raise SystemExit("websocket endpoints are not valid bind endpoints for the rclipboard server")
+    if endpoint.scheme == "fifo" and not os.environ.get("RCLIPBOARD_FIFO_DIR"):
+        asyncio.run(_run_fifo_server())
+        return
+    if endpoint.scheme == "fifo" and fifo_dir:
+        raise SystemExit(
+            "use RCLIPBOARD_FIFO_DIR alongside a TCP/HTTPS/UDS endpoint for parallel FIFO support"
+        )
+    if endpoint.scheme == "https" and (not ssl_certfile or not ssl_keyfile):
+        raise SystemExit(
+            "https endpoint requires RCLIPBOARD_SSL_CERTFILE and RCLIPBOARD_SSL_KEYFILE"
+        )
+
+    config = uvicorn.Config(
+        app="rclipboard.main:app",
+        host="" if endpoint.scheme == "uds" or args.fd is not None else endpoint.host,
+        port=0 if endpoint.scheme == "uds" or args.fd is not None else int(endpoint.port or 0),
+        uds=endpoint.path if endpoint.scheme == "uds" else None,
+        fd=args.fd,
+        ssl_certfile=ssl_certfile,
+        ssl_keyfile=ssl_keyfile,
+        ssl_keyfile_password=ssl_keyfile_password,
+        log_level=os.environ.get("RCLIPBOARD_LOG_LEVEL", "info"),
+        reload=os.environ.get("RCLIPBOARD_RELOAD", "0") in {"1", "true", "True"},
+    )
+
+    server = uvicorn.Server(config)
+    server.run()

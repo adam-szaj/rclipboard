@@ -1,0 +1,372 @@
+import asyncio
+import traceback
+import os
+from abc import ABC, abstractmethod
+from logging import Logger
+from typing import Any, Callable, Generic, TypeVar, override
+
+from fastapi import FastAPI
+
+from rclipboard.log import get_logger
+from rclipboard.types import (
+    BidirectionalInterface,
+    Interface,
+    InternalTopicData,
+    TopicData,
+)
+
+logger: Logger = get_logger(__name__)
+error = logger.error
+warning = logger.warning
+info = logger.info
+debug = logger.debug
+
+T = TypeVar("T")
+ItemType = InternalTopicData | list[str] | dict[str, str] | None
+
+
+class Bus(Generic[T]):
+    def __init__(self, **kwargs):
+        self.q: asyncio.Queue[T] = asyncio.Queue[T](**kwargs)
+
+    def task_done(self):
+        self.q.task_done()
+
+    async def get_nowait(self):
+        return self.q.get_nowait()
+
+    async def get(self):
+        return await self.q.get()
+
+    async def put(self, data: T):
+        return await self.q.put(data)
+
+    async def request(self, request: T):
+        pass
+
+    async def put_nowait(self, data: T):
+        return self.q.put_nowait(data)
+
+
+class SerialCall(ABC, Generic[T]):
+    def __init__(self, future: asyncio.Future[T] | None = None):
+        if future is None:
+            future = asyncio.Future()
+        self._future: asyncio.Future[T] = future
+
+    @property
+    def future(self) -> asyncio.Future[T]:
+        return self._future
+
+    @abstractmethod
+    async def do_call(self, app: "AppState") -> T:
+        pass
+
+    async def call(self, app: "AppState"):
+        try:
+            result: T = await self.do_call(app)
+            self._future.set_result(result)
+        except Exception as e:
+            self._future.set_exception(e)
+
+
+class SetTopicData(SerialCall[None]):
+    def __init__(
+        self,
+        topic_data: InternalTopicData,
+        future: asyncio.Future[None] | None,
+    ):
+        super().__init__(future)
+        self.topic_data: InternalTopicData = topic_data
+
+    @override
+    async def do_call(self, app: "AppState") -> None:
+        info(f"put item: '{self.topic_data}'")
+        await app.proces_put_item(self.topic_data)
+
+
+class GetTopicData(SerialCall[InternalTopicData | None]):
+    def __init__(
+        self,
+        topic: str,
+        future: asyncio.Future[InternalTopicData | None] | None,
+    ):
+        super().__init__(future)
+        self.topic: str = topic
+
+    @override
+    async def do_call(self, app: "AppState") -> InternalTopicData | None:
+        item: ItemType = await app.proces_get_item("topic", self.topic)
+        if item is None:
+            return None
+        assert isinstance(item, InternalTopicData)
+        return item
+
+
+GenericSerialCall = GetTopicData | SetTopicData
+
+
+class AppState:
+    def __init__(self, app: FastAPI):
+        self.app: FastAPI = app
+        self.bus: Bus[GenericSerialCall] = Bus[GenericSerialCall]()
+        self.clients: list[Interface] = []
+        self.topic_content: dict[str, InternalTopicData] = {}
+        self.subs: dict[str, set[Interface]] = {}
+        self.notify_delay_ms: int = int(
+            os.environ.get("RCLIPBOARD_NOTIFY_DELAY_MS", "250")
+        )
+        self.pending_notifications: dict[str, InternalTopicData] = {}
+        self.notification_tasks: dict[str, asyncio.Task[None]] = {}
+        self.notification_lock = asyncio.Lock()
+        self.dispatcher_task: asyncio.Task[Callable[[], None]] = (
+            asyncio.create_task(self.dispatcher(), name="dispatcher")
+        )
+
+    def subsctibe_client(self, client: Interface, topics: list[str]):
+        for topic in topics:
+            if topic not in self.subs:
+                self.subs[topic] = set()
+            self.subs[topic].add(client)
+        self._emit_runtime_state_change("subscriptions")
+
+    def unsubscribe_client(self, client: Interface, topics: list[str]):
+        for topic in topics:
+            subs = self.subs.get(topic)
+            if not subs:
+                continue
+            subs.discard(client)
+            if not subs:
+                del self.subs[topic]
+        self._emit_runtime_state_change("subscriptions")
+
+    def register_client(self, client: Interface):
+        self.clients.append(client)
+        self._emit_runtime_state_change("clients")
+
+    def unregister_client(self, client: Interface):
+        self.clients.remove(client)
+        self._emit_runtime_state_change("clients")
+
+    def _emit_runtime_state_change(self, reason: str) -> None:
+        hooks = list(getattr(self.app.state, "runtime_state_hooks", []))
+        for hook in hooks:
+            asyncio.create_task(
+                hook(self.app, reason),
+                name=f"runtime_state_{reason}",
+            )
+
+    async def dispatcher(self):
+        while True:
+            try:
+                await self.process_queue()
+            except RuntimeError as e:
+                error(f"Error: {e}")
+
+    async def _proces_data_item(self, topic_data: InternalTopicData):
+        assert isinstance(topic_data, InternalTopicData)
+        self.topic_content[topic_data.topic] = topic_data
+
+    async def _dispatch_data_item(self, topic_data: InternalTopicData):
+        subs: set[Interface] | None = self.subs.get(topic_data.topic)
+        info(f"subs: {subs}")
+        if not subs:
+            return
+        info(f"dispatch topic_data: {topic_data}")
+        source = topic_data.source
+        for conn in subs:
+            if isinstance(conn, BidirectionalInterface):
+                if source and conn is source:
+                    continue
+                await conn.send(topic_data.data)
+
+    async def _notify_topic_data(self, topic_data: InternalTopicData) -> None:
+        hooks = list(getattr(self.app.state, "local_topic_data_hooks", []))
+        hook = getattr(self.app.state, "on_local_topic_data", None)
+        if hook:
+            hooks.append(hook)
+        for item_hook in hooks:
+            await item_hook(self.app, topic_data.data, topic_data.source)
+        await self._dispatch_data_item(topic_data)
+
+    async def _delayed_notify(self, topic: str) -> None:
+        try:
+            await asyncio.sleep(self.notify_delay_ms / 1000.0)
+            await self.flush_topic_notification(topic)
+        except asyncio.CancelledError:
+            raise
+        finally:
+            async with self.notification_lock:
+                current = self.notification_tasks.get(topic)
+                if current is asyncio.current_task():
+                    self.notification_tasks.pop(topic, None)
+
+    async def _schedule_notification(self, topic_data: InternalTopicData) -> None:
+        if self.notify_delay_ms <= 0:
+            await self._notify_topic_data(topic_data)
+            return
+        async with self.notification_lock:
+            self.pending_notifications[topic_data.topic] = topic_data
+            task = self.notification_tasks.get(topic_data.topic)
+            if task is None or task.done():
+                self.notification_tasks[topic_data.topic] = asyncio.create_task(
+                    self._delayed_notify(topic_data.topic),
+                    name=f"notify_{topic_data.topic}",
+                )
+
+    async def flush_topic_notification(self, topic: str) -> None:
+        async with self.notification_lock:
+            topic_data = self.pending_notifications.pop(topic, None)
+        if topic_data is None:
+            return
+        await self._notify_topic_data(topic_data)
+
+    async def flush_all_notifications(self) -> None:
+        async with self.notification_lock:
+            topics = list(self.pending_notifications.keys())
+            tasks = list(self.notification_tasks.values())
+        for topic in topics:
+            await self.flush_topic_notification(topic)
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+
+    async def proces_put_item(self, topic_data: InternalTopicData):
+        # Update content store and fan-out
+        await self._proces_data_item(topic_data)
+        await self._schedule_notification(topic_data)
+
+    async def proces_get_item(self, subject: str, topic: str) -> ItemType:
+        info(f"subject: '{subject}' topic: '{topic}'")
+        content = None
+        if subject == "topic":
+            assert topic
+            content = self.topic_content.get(topic)
+            info(
+                f"found content for topic '{topic}': '{content}' from: '{
+                    self.topic_content
+                }'"
+            )
+        elif subject == "topics":
+            content = list(self.topic_content.keys())
+        else:
+            content = None
+
+        return content
+
+    async def process_queue(self):
+        info("wait for item")
+        try:
+            item: GenericSerialCall = await self.bus.get()
+            info(f"got item: {item}")
+            self.bus.task_done()
+            await item.call(self)
+        except AssertionError as e:
+            tb = e.__traceback__
+            while tb:
+                error(f"{tb.tb_frame}:{tb.tb_lineno}")
+                tb = tb.tb_next
+            error(f"AssertionError: {e.args}")
+            raise
+        except Exception as e:
+            tb = e.__traceback__
+            while tb:
+                error(f"{tb.tb_frame}:{tb.tb_lineno}")
+                tb = tb.tb_next
+            error(f"Exception '{type(e)}': '{e}'")
+            raise
+
+        print("process_queue: done.. ")
+
+    async def enqueue_request(
+        self, action: str, data: Any
+    ) -> TopicData | None:
+        # warning(f"action: {action} data: {data}")
+        # if not data:
+        #     traceback.print_stack()
+        if action.startswith("get:"):
+            if action.endswith(":topic"):
+                assert isinstance(data, str)
+                await self.flush_topic_notification(data)
+                req = GetTopicData(data, None)
+                debug(f"put request: {req}")
+                await self.bus.put(req)
+                debug("wait for future")
+                await req.future
+                internal_topic_data: InternalTopicData | None = req.future.result()
+                if internal_topic_data:
+                    return internal_topic_data.data
+            if action.endswith(":topics"):
+                topics = list(self.topic_content.keys())
+                return topics
+        else:
+            raise ValueError("Bad request")
+        return None
+
+    async def enqueue_topic_data(self, data: InternalTopicData) -> None:
+        info(f"data: {data}")
+        req = SetTopicData(data, None)
+        await self.bus.put(req)
+        await req.future
+
+    async def enqueue_topic_data_nowait(self, data: InternalTopicData):
+        info(f"data: {data}")
+        await self.bus.put_nowait(SetTopicData(data, None))
+
+
+def subsctibe_client(app: FastAPI, client: Interface, topics: list[str]):
+    assert isinstance(app.state.main, AppState)
+    main: AppState = app.state.main
+    main.subsctibe_client(client, topics)
+
+
+def register_client(app: FastAPI, client: Interface):
+    assert isinstance(app.state.main, AppState)
+    main: AppState = app.state.main
+    main.register_client(client)
+
+
+def unregister_client(app: FastAPI, client: Interface):
+    assert isinstance(app.state.main, AppState)
+    main: AppState = app.state.main
+    main.unregister_client(client)
+
+
+def unsubscribe_client(app: FastAPI, client: Interface, topics: list[str]):
+    assert isinstance(app.state.main, AppState)
+    main: AppState = app.state.main
+    main.unsubscribe_client(client, topics)
+
+
+async def enqueue_request_topic(app: FastAPI, topic: str) -> TopicData | None:
+    assert isinstance(app.state.main, AppState)
+    main: AppState = app.state.main
+    return await main.enqueue_request("get:topic", topic)
+
+
+async def enqueue_request_topics(app: FastAPI) -> TopicData | None:
+    assert isinstance(app.state.main, AppState)
+    main: AppState = app.state.main
+    return await main.enqueue_request("get:topics", None)
+
+
+async def enqueue_topic_data(
+    app: FastAPI, data: TopicData, source: Interface | None
+) -> InternalTopicData:
+    internal_topic_data = InternalTopicData(data=data, source=source)
+    assert isinstance(app.state.main, AppState)
+    main: AppState = app.state.main
+    await main.enqueue_topic_data(internal_topic_data)
+    return internal_topic_data
+
+
+async def enqueue_topic_data_nowait(
+    app: FastAPI, data: TopicData, source: Interface | None
+):
+    internal_topic_data = InternalTopicData(data=data, source=source)
+    await app.state.main.enqueue_topic_data_nowait(internal_topic_data)
+    return internal_topic_data

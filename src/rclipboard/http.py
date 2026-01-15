@@ -1,0 +1,175 @@
+from __future__ import annotations
+
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import JSONResponse
+from starlette.exceptions import HTTPException as StarletteHTTPException
+
+from rclipboard.types import (
+    ClipGetParams,
+    ClipGetResult,
+    ClipboardItem,
+    ClipPutParams,
+    ClipPutResult,
+    HealthResult,
+    RPCError,
+    StatusResult,
+    TopicData,
+    TopicsListParams,
+    TopicsListResult,
+)
+
+from .app_state import (
+    enqueue_request_topic,
+    enqueue_request_topics,
+    enqueue_topic_data,
+)
+from .log import get_logger
+from .types import Interface
+from .xsel import get_xsel_status
+
+error = (get_logger(__name__)).error
+warning = (get_logger(__name__)).warning
+info = (get_logger(__name__)).info
+debug = (get_logger(__name__)).debug
+trace = (get_logger(__name__)).debug
+if hasattr(get_logger(__name__), "trace"):
+    trace = getattr(get_logger(__name__), "trace")
+
+
+def _topic_data_to_clipboard_item(data: TopicData) -> ClipboardItem:
+    value = data.value.value
+    value_type = data.value.value_type
+    encoding = data.value.value_encoding
+    mime = (
+        "application/octet-stream" if value_type == "binary" else "text/plain"
+    )
+    rpc_encoding = "utf-8" if encoding == "plain" else encoding
+    return ClipboardItem(
+        topic=data.topic,
+        value=value,
+        mime=mime,
+        encoding=rpc_encoding,
+    )
+
+
+def _clipboard_item_to_topic_data(
+    item: ClipboardItem, meta: dict[str, str] | None = None
+) -> TopicData:
+    value_type = "binary"
+    value_encoding = item.encoding
+    if item.encoding == "utf-8":
+        value_type = "text"
+        value_encoding = "plain"
+    return TopicData.model_validate(
+        {
+            "topic": item.topic,
+            "meta": meta or {},
+            "value": {
+                "value": item.value,
+                "type": value_type,
+                "encoding": value_encoding,
+            },
+        }
+    )
+
+
+def install_module(app: FastAPI):
+    @app.exception_handler(StarletteHTTPException)
+    async def _http_exception_handler(
+        _request: Request, exc: StarletteHTTPException
+    ):
+        if isinstance(exc.detail, dict) and {"code", "message"} <= set(
+            exc.detail
+        ):
+            return JSONResponse(
+                status_code=exc.status_code, content=exc.detail
+            )
+        return JSONResponse(
+            status_code=exc.status_code,
+            content={"code": exc.status_code, "message": str(exc.detail)},
+        )
+
+    @app.get("/health")
+    @app.get("/v1/health.get", response_model=HealthResult)
+    async def _health(request: Request):
+        info(f"request from: {request.client}")
+        xsel = get_xsel_status(app)
+        return HealthResult(
+            ok=True,
+            xsel_enabled=bool(xsel["enabled"]),
+            xsel_good=bool(xsel["good"]),
+        )
+
+    @app.get("/status")
+    @app.get("/v1/status.get", response_model=StatusResult)
+    async def _get_status(request: Request):
+        info(f"request from: {request.client}")
+        topics = list(sorted(await enqueue_request_topics(app) or []))
+        clients = [
+            client.name
+            for client in getattr(app.state.main, "clients", [])
+            if isinstance(client, Interface)
+        ]
+        return StatusResult(
+            ok=True,
+            topics=topics,
+            clients=clients,
+            xsel=get_xsel_status(app),
+        )
+
+    @app.get("/topics")
+    @app.post("/v1/topics.list", response_model=TopicsListResult)
+    async def _get_topics(
+        request: Request, body: TopicsListParams | None = None
+    ) -> TopicsListResult:
+        info(f"request from: {request.client}")
+        _ = body
+        return TopicsListResult(
+            topics=list(sorted(await enqueue_request_topics(app) or []))
+        )
+
+    @app.get("/clip/{topic}", response_model=TopicData)
+    async def _get_clip(topic: str, request: Request) -> TopicData:
+        info(f"request from: {request.client}")
+        content: TopicData | None = await enqueue_request_topic(app, topic)
+        if content is None:
+            raise HTTPException(status_code=404)
+        return content
+
+    @app.post("/v1/clip.get", response_model=ClipGetResult)
+    async def _post_get_clip(
+        body: ClipGetParams, request: Request
+    ) -> ClipGetResult:
+        info(f"request from: {request.client}")
+        content: TopicData | None = await enqueue_request_topic(
+            app, body.topic
+        )
+        if content is None:
+            return JSONResponse(
+                status_code=404,
+                content=RPCError(
+                    code=1001,
+                    message="Topic not found",
+                    data={"topic": body.topic},
+                ).model_dump(mode="json"),
+            )
+        assert content is not None
+        return ClipGetResult(item=_topic_data_to_clipboard_item(content))
+
+    @app.post("/clip", response_model=TopicData)
+    async def _post_clip(body: TopicData, request: Request) -> TopicData:
+        info(f"request from: {request.client}")
+        _ = await enqueue_topic_data(app, data=body, source=None)
+        return body
+
+    @app.post("/v1/clip.put", response_model=ClipPutResult)
+    async def _post_clip_put(
+        body: ClipPutParams, request: Request
+    ) -> ClipPutResult:
+        info(f"request from: {request.client}")
+        items: list[ClipboardItem] = []
+        for item in body.items:
+            topic_data = _clipboard_item_to_topic_data(item, meta=body.meta)
+            await enqueue_topic_data(app, data=topic_data, source=None)
+            items.append(_topic_data_to_clipboard_item(topic_data))
+        return ClipPutResult(items=items)

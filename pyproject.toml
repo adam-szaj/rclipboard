@@ -1,0 +1,42 @@
+[project]
+name = "rclipboard"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "Adam Szaj", email = "adam.szaj@gmail.com" }
+]
+requires-python = ">=3.13"
+dependencies = [
+    "aiofiles>=25.1.0",
+    "asyncio>=4.0.0",
+    "fastapi>=0.128.0",
+    "uvicorn>=0.40.0",
+    "websockets>=15.0.1",
+]
+
+[project.scripts]
+rclipboard = "rclipboard:main"
+
+[build-system]
+requires = ["uv_build>=0.9.26,<0.10.0"]
+build-backend = "uv_build"
+
+[tool.pyright]
+typeCheckingMode = "basic"
+autoImportCompletions = true
+useLibraryCodeForTypes = true
+
+[tool.ruff]
+line-length = 100
+extend-ignore = ["N802", "N803", "N806"]
+target-version = "py311"
+
+[tool.yapf]
+based_on_style = "pep8"
+indent_width = 4
+column_limit = 100
+
+[tool.isort]
+line_length = 100
+indent = "    "
