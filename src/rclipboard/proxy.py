@@ -63,41 +63,36 @@ class ProxyClient:
 
     async def _watch(self) -> None:
         self._watch_id = next_id()
-        await self._send_json(
-            {
-                "jsonrpc": "2.0",
-                "id": self._watch_id,
-                "method": "clip.watch",
-                "params": {
-                    "topics": self.topics,
-                },
-            }
-        )
+        await self._send_json({
+            "jsonrpc": "2.0",
+            "id": self._watch_id,
+            "method": "clip.watch",
+            "params": {
+                "topics": self.topics,
+            },
+        })
 
-    async def send_clip(
-        self, item: ClipboardItem, meta: dict[str, str] | None = None
-    ):
+    async def send_clip(self,
+                        item: ClipboardItem,
+                        meta: dict[str, str] | None = None):
         if not self.connected:
             return
-        await self._send_json(
-            {
-                "jsonrpc": "2.0",
-                "id": next_id(),
-                "method": "clip.put",
-                "params": {
-                    "items": [item.model_dump(mode="json")],
-                    "meta": meta or {},
-                },
-            }
-        )
+        await self._send_json({
+            "jsonrpc": "2.0",
+            "id": next_id(),
+            "method": "clip.put",
+            "params": {
+                "items": [item.model_dump(mode="json")],
+                "meta": meta or {},
+            },
+        })
 
     async def _handle_response(self, message: dict[str, object]) -> None:
         message_id = message.get("id")
         if message_id == self._watch_id:
             if "error" in message:
                 warning(
-                    f"proxy watch rejected by upstream: {message['error']}"
-                )
+                    f"proxy watch rejected by upstream: {message['error']}")
             else:
                 info(f"proxy subscribed upstream topics: {self.topics}")
 
@@ -173,8 +168,7 @@ def _make_ws_url() -> dict[str, object]:
         }
     if endpoint.scheme == "fifo":
         raise ValueError(
-            "fifo endpoints are not supported for proxy upstream connections"
-        )
+            "fifo endpoints are not supported for proxy upstream connections")
     if endpoint.scheme in {"https", "wss"}:
         return {"url": f"wss://{endpoint.host}:{endpoint.port}/ws"}
     return {"url": f"ws://{endpoint.host}:{endpoint.port}/ws"}
@@ -206,15 +200,15 @@ async def shutdown_proxy(app: FastAPI) -> None:
     app.state.proxy_connected = False
 
 
-async def on_local_topic_data(
-    app: FastAPI, topic_data: TopicData, source: Any
-) -> None:
+async def on_local_topic_data(app: FastAPI, topic_data: TopicData,
+                              source: Any) -> None:
     """
     Forward locally accepted clipboard updates to the upstream server.
 
     Events originating from this proxy are ignored to prevent loops:
     upstream `clip.changed` -> local store -> re-forward upstream.
     """
+    info(f"on_local_topic_data: {topic_data}")
     if not getattr(app.state, "proxy_enabled", False):
         return
     client: ProxyClient | None = getattr(app.state, "proxy_client", None)
@@ -235,9 +229,8 @@ def _topic_data_to_clipboard_item(data: TopicData) -> ClipboardItem:
     value = data.value.value
     value_type = data.value.value_type
     encoding = data.value.value_encoding
-    mime = (
-        "application/octet-stream" if value_type == "binary" else "text/plain"
-    )
+    mime = ("application/octet-stream"
+            if value_type == "binary" else "text/plain")
     rpc_encoding = "utf-8" if encoding == "plain" else encoding
     return ClipboardItem(
         topic=data.topic,
@@ -247,22 +240,20 @@ def _topic_data_to_clipboard_item(data: TopicData) -> ClipboardItem:
     )
 
 
-def _clipboard_item_to_topic_data(
-    item: ClipboardItem, meta: dict[str, str] | None = None
-) -> TopicData:
+def _clipboard_item_to_topic_data(item: ClipboardItem,
+                                  meta: dict[str, str] | None = None
+                                  ) -> TopicData:
     value_type = "binary"
     value_encoding = item.encoding
     if item.encoding == "utf-8":
         value_type = "text"
         value_encoding = "plain"
-    return TopicData.model_validate(
-        {
-            "topic": item.topic,
-            "meta": meta or {},
-            "value": {
-                "value": item.value,
-                "type": value_type,
-                "encoding": value_encoding,
-            },
-        }
-    )
+    return TopicData.model_validate({
+        "topic": item.topic,
+        "meta": meta or {},
+        "value": {
+            "value": item.value,
+            "type": value_type,
+            "encoding": value_encoding,
+        },
+    })

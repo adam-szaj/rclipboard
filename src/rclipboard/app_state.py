@@ -1,5 +1,4 @@
 import asyncio
-import traceback
 import os
 from abc import ABC, abstractmethod
 from logging import Logger
@@ -81,7 +80,6 @@ class SetTopicData(SerialCall[None]):
 
     @override
     async def do_call(self, app: "AppState") -> None:
-        info(f"put item: '{self.topic_data}'")
         await app.proces_put_item(self.topic_data)
 
 
@@ -169,10 +167,8 @@ class AppState:
 
     async def _dispatch_data_item(self, topic_data: InternalTopicData):
         subs: set[Interface] | None = self.subs.get(topic_data.topic)
-        info(f"subs: {subs}")
         if not subs:
             return
-        info(f"dispatch topic_data: {topic_data}")
         source = topic_data.source
         for conn in subs:
             if isinstance(conn, BidirectionalInterface):
@@ -201,7 +197,9 @@ class AppState:
                 if current is asyncio.current_task():
                     self.notification_tasks.pop(topic, None)
 
-    async def _schedule_notification(self, topic_data: InternalTopicData) -> None:
+    async def _schedule_notification(
+        self, topic_data: InternalTopicData
+    ) -> None:
         if self.notify_delay_ms <= 0:
             await self._notify_topic_data(topic_data)
             return
@@ -209,9 +207,11 @@ class AppState:
             self.pending_notifications[topic_data.topic] = topic_data
             task = self.notification_tasks.get(topic_data.topic)
             if task is None or task.done():
-                self.notification_tasks[topic_data.topic] = asyncio.create_task(
-                    self._delayed_notify(topic_data.topic),
-                    name=f"notify_{topic_data.topic}",
+                self.notification_tasks[topic_data.topic] = (
+                    asyncio.create_task(
+                        self._delayed_notify(topic_data.topic),
+                        name=f"notify_{topic_data.topic}",
+                    )
                 )
 
     async def flush_topic_notification(self, topic: str) -> None:
@@ -259,10 +259,8 @@ class AppState:
         return content
 
     async def process_queue(self):
-        info("wait for item")
         try:
             item: GenericSerialCall = await self.bus.get()
-            info(f"got item: {item}")
             self.bus.task_done()
             await item.call(self)
         except AssertionError as e:
@@ -297,7 +295,9 @@ class AppState:
                 await self.bus.put(req)
                 debug("wait for future")
                 await req.future
-                internal_topic_data: InternalTopicData | None = req.future.result()
+                internal_topic_data: InternalTopicData | None = (
+                    req.future.result()
+                )
                 if internal_topic_data:
                     return internal_topic_data.data
             if action.endswith(":topics"):
@@ -308,13 +308,11 @@ class AppState:
         return None
 
     async def enqueue_topic_data(self, data: InternalTopicData) -> None:
-        info(f"data: {data}")
         req = SetTopicData(data, None)
         await self.bus.put(req)
         await req.future
 
     async def enqueue_topic_data_nowait(self, data: InternalTopicData):
-        info(f"data: {data}")
         await self.bus.put_nowait(SetTopicData(data, None))
 
 

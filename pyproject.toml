@@ -40,3 +40,8 @@ column_limit = 100
 [tool.isort]
 line_length = 100
 indent = "    "
+
+[tool.uv.workspace]
+members = [
+    "venv",
+]

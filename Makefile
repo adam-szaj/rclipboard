@@ -7,7 +7,7 @@ TEST_PORT ?= 7979
 UDS  ?= $(XDG_RUNTIME_DIR)/rclipboard.sock
 KEY  ?= key.pem
 CERT ?= cert.pem
-LOG_LEVEL ?= debug
+LOG_LEVEL ?= warning
 
 # Proxy upstream config
 UPSTREAM_HOST ?= 127.0.0.1
@@ -15,7 +15,7 @@ UPSTREAM_PORT ?= 8989
 UPSTREAM_TEST_PORT ?= 7979
 UPSTREAM_UDS  ?= $(XDG_RUNTIME_DIR)/rclipboard.sock
 RCLIPBOARD_LOG_LEVEL := $(LOG_LEVEL)
-RCLIPBOARD_PY_LOG_LEVEL := DEBUG
+RCLIPBOARD_PY_LOG_LEVEL := INFO
 
 # Docker
 IMAGE ?= rclipboard:latest
@@ -58,7 +58,9 @@ help:
 	@echo "  nvim-plugin-pack     - luarocks pack rock for nvim-rclipboard"
 
 install:
-	python -m pip install -U pip fastapi uvicorn websockets
+	uv venv --seed -c && \
+	source .venv/bin/activate && \
+	uv pip install -U pip fastapi uvicorn websockets
 
 install-exe:
 	install -m 0755 ./scripts/rclipctl ~/bin/rclipctl
@@ -73,17 +75,15 @@ run:
 	RCLIPBOARD_UPSTREAM_ADDR=$(UPSTREAM_HOST) \
 	RCLIPBOARD_UPSTREAM_PORT=$(UPSTREAM_PORT) \
 	RCLIPBOARD_UDS="" \
-	uvicorn rclipboard.main:app --host $(HOST) --port $(PORT) --log-level $(LOG_LEVEL)
+	PYTHONPATH=src .venv/bin/python -m uvicorn rclipboard.main:app --host $(HOST) --port $(PORT) --log-level $(LOG_LEVEL)
 
 run-dev:
 	RCLIPBOARD_PROXY=0 \
+	RCLIPBOARD_XSEL=0 \
+	RCLIPBOARD_FIFO_DIR=runtime.d \
 	RCLIPBOARD_LOG_LEVEL=$(RCLIPBOARD_LOG_LEVEL) \
 	RCLIPBOARD_PY_LOG_LEVEL=$(RCLIPBOARD_PY_LOG_LEVEL) \
-	RCLIPBOARD_UPSTREAM_ADDR=$(UPSTREAM_HOST) \
-	RCLIPBOARD_UPSTREAM_PORT=$(UPSTREAM_PORT) \
-	RCLUPBOARD_UPSTREAM_UDS=$(UPSTREAM_UDS) \
-	RCLIPBOARD_XSEL=0 \
-	uvicorn rclipboard.main:app --host $(HOST) --port $(PORT) --log-level $(LOG_LEVEL) --reload
+	PYTHONPATH=src .venv/bin/python -m uvicorn rclipboard.main:app --host $(HOST) --port $(PORT) --log-level $(LOG_LEVEL) --reload
 
 
 
@@ -113,7 +113,7 @@ run-uds:
 	RCLIPBOARD_UPSTREAM_ADDR=$(UPSTREAM_HOST) \
 	RCLIPBOARD_UPSTREAM_PORT=$(UPSTREAM_PORT) \
 	RCLIPBOARD_BIND_UDS=$(UDS) \
-	uvicorn rclipboard.main:app --uds $(UDS) --log-level $(LOG_LEVEL)
+	PYTHONPATH=src .venv/bin/python -m uvicorn rclipboard.main:app --uds $(UDS) --log-level $(LOG_LEVEL)
 
 run-uds-dev:
 	RCLIPBOARD_PROXY=0 \
@@ -122,7 +122,7 @@ run-uds-dev:
 	RCLIPBOARD_UPSTREAM_ADDR=$(UPSTREAM_HOST) \
 	RCLIPBOARD_UPSTREAM_PORT=$(UPSTREAM_PORT) \
 	RCLIPBOARD_BIND_UDS=$(UDS) \
-	uvicorn rclipboard.main:app --uds $(UDS) --log-level $(LOG_LEVEL) --reload
+	PYTHONPATH=src .venv/bin/python -m uvicorn rclipboard.main:app --uds $(UDS) --log-level $(LOG_LEVEL) --reload
 
 run-https: $(KEY) $(CERT)
 	RCLIPBOARD_PROXY=1 \
@@ -131,7 +131,7 @@ run-https: $(KEY) $(CERT)
 	RCLIPBOARD_UPSTREAM_ADDR=$(UPSTREAM_HOST) \
 	RCLIPBOARD_UPSTREAM_PORT=$(UPSTREAM_PORT) \
 	RCLUPBOARD_UPSTREAM_UDS=$(UPSTREAM_UDS) \
-	uvicorn rclipboard.main:app --host $(HOST) --port $(PORT) \
+	PYTHONPATH=src .venv/bin/python -m uvicorn rclipboard.main:app --host $(HOST) --port $(PORT) \
 		--ssl-keyfile $(KEY) --ssl-certfile $(CERT) --log-level $(LOG_LEVEL)
 
 run-proxy:
@@ -141,16 +141,18 @@ run-proxy:
 	RCLIPBOARD_UPSTREAM_ADDR=$(UPSTREAM_HOST) \
 	RCLIPBOARD_UPSTREAM_PORT=$(UPSTREAM_PORT) \
 	RCLUPBOARD_UPSTREAM_UDS=$(UPSTREAM_UDS) \
-	uvicorn rclipboard.main:app --host $(HOST) --port $(PORT) --log-level $(LOG_LEVEL)
+	PYTHONPATH=src .venv/bin/python -m uvicorn rclipboard.main:app --host $(HOST) --port $(PORT) --log-level $(LOG_LEVEL)
 
 run-proxy-dev:
+	RCLIPBOARD_FIFO_DIR=runtime-proxy.d \
 	RCLIPBOARD_PROXY=1 \
+	RCLIPBOARD_XSEL=0 \
 	RCLIPBOARD_LOG_LEVEL=$(RCLIPBOARD_LOG_LEVEL) \
 	RCLIPBOARD_PY_LOG_LEVEL=$(RCLIPBOARD_PY_LOG_LEVEL) \
 	RCLIPBOARD_UPSTREAM_ADDR=$(UPSTREAM_HOST) \
 	RCLIPBOARD_UPSTREAM_PORT=$(UPSTREAM_PORT) \
-	RCLUPBOARD_UPSTREAM_UDS=$(UPSTREAM_UDS) \
-	uvicorn rclipboard.main:app --host $(HOST) --port $(PORT) --log-level $(LOG_LEVEL) --reload
+	RCLUPBOARD_UPSTREAM_UDS="" \
+	PYTHONPATH=src .venv/bin/python -m uvicorn rclipboard.main:app --host $(HOST) --port 7878 --log-level $(LOG_LEVEL) --reload
 
 cert:
 	./scripts/gencert.sh --cn localhost --key $(KEY) --cert $(CERT)

@@ -3,7 +3,7 @@
 set -euo pipefail
 
 if [ $# -lt 1 ]; then
-    echo "usage: $0 <put|get|clip|getclip|status|topics|health> [options]" >&2
+    echo "usage: $0 <put|get|status|topics|health> [options]" >&2
     exit 1
 fi
 
@@ -34,7 +34,6 @@ Subcommands:
   put [options]        # read stdin and call clip.put
   get [options]        # call clip.get
   clip [options]       # alias for put
-  getclip [options]    # alias for get
   status [options]        # server status
   topics [options]        # list topics
   health [options]        # server health
@@ -163,7 +162,7 @@ resolve_candidates()
 {
     if [ "$CLI_CONFIGURED" = "1" ]; then
         if [ -n "$ENDPOINT" ]; then
-        case "$ENDPOINT" in
+            case "$ENDPOINT" in
                 fifo://*)
                     parse_endpoint_to_candidate CLI_FIFO "$ENDPOINT" ;;
                 uds://*|/*)
@@ -360,8 +359,6 @@ call_put()
         --data-binary @- | { if [ "$json" = "1" ]; then jq -c; else cat >/dev/null; fi; }
 }
 
-# ---------- Endpoint: getclip ----------
-
 encode()
 {
     local codec="$1"
@@ -392,8 +389,8 @@ call_get()
     url=$(endpoint_url "/v1/clip.get")
     body=$(jq -cn --arg topic "$topic" '{topic: $topic}')
     resp=$(printf '%s' "$body" | curl "${CURL_SOCK_OPTS[@]}" -fsS \
-        -X POST "$url" \
-        -H 'Content-Type: application/json' \
+            -X POST "$url" \
+            -H 'Content-Type: application/json' \
         --data-binary @-)
 
     if [ "$json" = "1" ]; then
@@ -511,8 +508,8 @@ call_get_fifo()
 # ---------- Dispatch ----------
 
 case "$mode" in
-    put|clip) call_put ;;
-    get|getclip) call_get ;;
+    put) call_put ;;
+    get) call_get ;;
     status)  call_status ;;
     topics)  call_topics ;;
     health)  call_health ;;
