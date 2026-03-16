@@ -6,7 +6,7 @@ readme = "README.md"
 authors = [
     { name = "Adam Szaj", email = "adam.szaj@gmail.com" }
 ]
-requires-python = ">=3.13"
+requires-python = ">=3.11"
 dependencies = [
     "aiofiles>=25.1.0",
     "asyncio>=4.0.0",

@@ -47,8 +47,8 @@ do
 done
 
 if [ ! -f "$ENV_DIR/env" ]; then
-  cp "$REPO_DIR/scripts/systemd/user/rclipboard.env.example" "$ENV_DIR/env"
-  echo "Created $ENV_DIR/env (edit as needed)."
+	echo -e "cat << EOF\n $(cat ./scripts/systemd/user/rclipboard.env.example)\nEOF" | bash - > "$ENV_DIR/env"
+    echo "Created $ENV_DIR/env (edit as needed)."
 fi
 
 if [ ! -x "$VENV_DIR/bin/python" ]; then
