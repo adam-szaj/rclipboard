@@ -22,14 +22,17 @@ EOF
 if [ $? != 0 ] ; then echo "Terminating..." >&2 ; exit 1 ; fi
 eval set -- "$TEMP"
 
+test -e ~/.config/rclipboard/env && source ~/.config/rclipboard/env
+
 demonize=0
 get=0
 post=0
 remote_addr=
 remote_port=22
 tunel=0
-service_port=8787
-proxy_port=8788
+
+service_port=${RCLIPBOARD_BIND_PORT:-8989}
+proxy_port=${RCLIPBOARD_UPSTREAM_PORT:-8988}
 RSSH_OPTIONS=()
 OTEMP=()
 ssh_opts=()
