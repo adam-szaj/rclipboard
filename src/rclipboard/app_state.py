@@ -282,7 +282,7 @@ class AppState:
 
     async def enqueue_request(
         self, action: str, data: Any
-    ) -> TopicData | None:
+    ) -> TopicData | list[str] | None:
         # warning(f"action: {action} data: {data}")
         # if not data:
         #     traceback.print_stack()
@@ -343,13 +343,19 @@ def unsubscribe_client(app: FastAPI, client: Interface, topics: list[str]):
 async def enqueue_request_topic(app: FastAPI, topic: str) -> TopicData | None:
     assert isinstance(app.state.main, AppState)
     main: AppState = app.state.main
-    return await main.enqueue_request("get:topic", topic)
+    result = await main.enqueue_request("get:topic", topic)
+    if result and isinstance(result, TopicData):
+        return result
+    return None
 
 
-async def enqueue_request_topics(app: FastAPI) -> TopicData | None:
+async def enqueue_request_topics(app: FastAPI) -> list[str] | None:
     assert isinstance(app.state.main, AppState)
     main: AppState = app.state.main
-    return await main.enqueue_request("get:topics", None)
+    result = await main.enqueue_request("get:topics", None)
+    if result:
+        assert isinstance(result, list)
+    return result
 
 
 async def enqueue_topic_data(

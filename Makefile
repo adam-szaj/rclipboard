@@ -57,10 +57,14 @@ help:
 	@echo "  nvim-plugin-install  - luarocks make (local) nvim-rclipboard"
 	@echo "  nvim-plugin-pack     - luarocks pack rock for nvim-rclipboard"
 
-install:
+.venv:
+	pip install uv && \
 	uv venv --seed -c && \
 	source .venv/bin/activate && \
-	uv pip install -U pip fastapi uvicorn websockets
+	pip install -U pip uv uvicorn && \
+    uv pip install -r pyproject.toml
+
+install: .venv
 
 install-exe:
 	install -m 0755 ./scripts/rclipctl ~/bin/rclipctl
@@ -68,7 +72,7 @@ install-exe:
 	install -m 0755 ./scripts/rctrl-v ~/bin/rctrl-v
 	install -m 0755 ./scripts/rclipboard-tunel ~/bin/rclipboard-tunel
 
-run:
+run: .venv
 	RCLIPBOARD_PROXY=0 \
 	RCLIPBOARD_LOG_LEVEL=$(RCLIPBOARD_LOG_LEVEL) \
 	RCLIPBOARD_PY_LOG_LEVEL=$(RCLIPBOARD_PY_LOG_LEVEL) \
@@ -77,7 +81,7 @@ run:
 	RCLIPBOARD_UDS="" \
 	PYTHONPATH=src .venv/bin/python -m uvicorn rclipboard.main:app --host $(HOST) --port $(PORT) --log-level $(LOG_LEVEL)
 
-run-dev:
+run-dev: .venv
 	RCLIPBOARD_PROXY=0 \
 	RCLIPBOARD_XSEL=0 \
 	RCLIPBOARD_FIFO_DIR=runtime.d \
@@ -87,7 +91,7 @@ run-dev:
 
 
 
-run-test-dev:
+run-test-dev: .venv
 	RCLIPBOARD_PROXY=0 \
 	RCLIPBOARD_LOG_LEVEL=$(RCLIPBOARD_LOG_LEVEL) \
 	RCLIPBOARD_PY_LOG_LEVEL=$(RCLIPBOARD_PY_LOG_LEVEL) \
@@ -96,17 +100,17 @@ run-test-dev:
 	RCLIPBOARD_XSEL=0 \
 	uvicorn rclipboard.main:app --host $(HOST) --port $(TEST_PORT) --log-level $(LOG_LEVEL) --reload
 
-run-smoke-clip:
+run-smoke-clip: .venv
 	date | ./scripts/rclipctl clip -c --host $(HOST) --port $(TEST_PORT) --uds ""
 
-run-smoke-get:
+run-smoke-get: .venv
 	./scripts/rclipctl getclip -c --host $(HOST) --port $(TEST_PORT) --uds ""
 
-run-smoke-test:
+run-smoke-test: .venv
 	date | ./scripts/rclipctl clip -c --host $(HOST) --port $(TEST_PORT) --uds ""
 	./scripts/rclipctl getclip -c --host $(HOST) --port $(TEST_PORT) --uds ""
 
-run-uds:
+run-uds: .venv
 	RCLIPBOARD_PROXY=0 \
 	RCLIPBOARD_LOG_LEVEL=$(RCLIPBOARD_LOG_LEVEL) \
 	RCLIPBOARD_PY_LOG_LEVEL=$(RCLIPBOARD_PY_LOG_LEVEL) \
@@ -115,7 +119,7 @@ run-uds:
 	RCLIPBOARD_BIND_UDS=$(UDS) \
 	PYTHONPATH=src .venv/bin/python -m uvicorn rclipboard.main:app --uds $(UDS) --log-level $(LOG_LEVEL)
 
-run-uds-dev:
+run-uds-dev: .venv
 	RCLIPBOARD_PROXY=0 \
 	RCLIPBOARD_LOG_LEVEL=$(RCLIPBOARD_LOG_LEVEL) \
 	RCLIPBOARD_PY_LOG_LEVEL=$(RCLIPBOARD_PY_LOG_LEVEL) \
@@ -134,7 +138,7 @@ run-https: $(KEY) $(CERT)
 	PYTHONPATH=src .venv/bin/python -m uvicorn rclipboard.main:app --host $(HOST) --port $(PORT) \
 		--ssl-keyfile $(KEY) --ssl-certfile $(CERT) --log-level $(LOG_LEVEL)
 
-run-proxy:
+run-proxy: .venv
 	RCLIPBOARD_PROXY=1 \
 	RCLIPBOARD_LOG_LEVEL=$(RCLIPBOARD_LOG_LEVEL) \
 	RCLIPBOARD_PY_LOG_LEVEL=$(RCLIPBOARD_PY_LOG_LEVEL) \
@@ -143,7 +147,7 @@ run-proxy:
 	RCLUPBOARD_UPSTREAM_UDS=$(UPSTREAM_UDS) \
 	PYTHONPATH=src .venv/bin/python -m uvicorn rclipboard.main:app --host $(HOST) --port $(PORT) --log-level $(LOG_LEVEL)
 
-run-proxy-dev:
+run-proxy-dev: .venv
 	RCLIPBOARD_FIFO_DIR=runtime-proxy.d \
 	RCLIPBOARD_PROXY=1 \
 	RCLIPBOARD_XSEL=0 \

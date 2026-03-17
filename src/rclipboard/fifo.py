@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio as a
-import aiofiles as af
 import base64
 import binascii
 import contextlib
@@ -10,16 +9,16 @@ from logging import Logger
 from pathlib import Path
 from typing import Any
 
-from aiofiles import base
+import aiofiles as af
 from fastapi import FastAPI
 
 from rclipboard.app_state import enqueue_request_topics, enqueue_topic_data
 from rclipboard.helpers import fifo_dir_from_env
 from rclipboard.log import get_logger
 from rclipboard.types import (
+    ClipboardItem,
     ClipGetResult,
     ClipPutParams,
-    ClipboardItem,
     HealthResult,
     StatusResult,
     TopicData,
@@ -118,9 +117,11 @@ def _snapshot_paths(root: Path) -> dict[str, Path]:
     }
 
 
-def _write_atomic(path: Path, payload: bytes) -> None:
-    tmp = path.with_name(f".{path.name}.tmp.{os.getpid()}")
-    tmp.write_bytes(payload)
+async def _write_atomic(path: Path, payload: bytes) -> None:
+    tmp: Path = path.with_name(f".{path.name}.tmp.{os.getpid()}")
+    async with af.open(tmp, "w+b") as f:
+        await f.write(payload)
+    tmp.chmod(0o400)
     os.replace(tmp, path)
 
 
@@ -230,15 +231,15 @@ class FIFOTransport:
                 )
 
     async def refresh_snapshots(self) -> None:
-        topics = list(sorted(await enqueue_request_topics(self.app) or []))
+        topics = list(sorted((await enqueue_request_topics(self.app)) or []))
         snapshots = _snapshot_paths(self.root)
-        self._write_snapshot_if_changed(
+        await self._write_snapshot_if_changed(
             "topics",
             snapshots["topics"],
             TopicsListResult(topics=topics).model_dump_json().encode("utf-8"),
         )
         xsel = get_xsel_status(self.app)
-        self._write_snapshot_if_changed(
+        await self._write_snapshot_if_changed(
             "health",
             snapshots["health"],
             HealthResult(
@@ -253,7 +254,7 @@ class FIFOTransport:
             client.name
             for client in getattr(self.app.state.main, "clients", [])
         ]
-        self._write_snapshot_if_changed(
+        await self._write_snapshot_if_changed(
             "status",
             snapshots["status"],
             StatusResult(
@@ -266,7 +267,7 @@ class FIFOTransport:
             .encode("utf-8"),
         )
 
-    def _write_snapshot_if_changed(
+    async def _write_snapshot_if_changed(
         self,
         name: str,
         path: Path,
@@ -274,7 +275,7 @@ class FIFOTransport:
     ) -> None:
         if self.snapshot_cache.get(name) == payload:
             return
-        _write_atomic(path, payload)
+        await _write_atomic(path, payload)
         self.snapshot_cache[name] = payload
 
     async def on_topic_data(
@@ -291,8 +292,10 @@ class FIFOTransport:
         paths = _topic_paths(self.root, topic_data.topic)
         info(f"paths: {paths}")
         try:
-            _write_atomic(paths["state_raw"], _topic_data_to_bytes(topic_data))
-            _write_atomic(
+            await _write_atomic(
+                paths["state_raw"], _topic_data_to_bytes(topic_data)
+            )
+            await _write_atomic(
                 paths["state_json"],
                 ClipGetResult(item=_topic_data_to_clipboard_item(topic_data))
                 .model_dump_json()
