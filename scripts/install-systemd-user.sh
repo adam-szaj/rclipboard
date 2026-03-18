@@ -14,6 +14,19 @@ PYTHON_BIN="${PYTHON_BIN:-python3}"
 SYSTEMCTL_BIN="${SYSTEMCTL_BIN:-systemctl}"
 SKIP_PIP_INSTALL="${RCLIPBOARD_INSTALL_SKIP_PIP:-0}"
 
+RCLIPBOARD_BIND_ADDR=127.0.0.1
+RCLIPBOARD_BIND_PORT=8989
+RCLIPBOARD_UPSTREAM_ADDR=127.0.0.1
+RCLIPBOARD_UPSTREAM_PORT=8988
+
+# TODO default settings for tcp, uds, fifo for main-service and proxy
+# TODO add command line options, to choose which configuration should be generated like so:
+# ./scripts/install-systemd-user.sh --service=tcp[[;address=127.0.0.1];port=8989] [--proxy=none] --xsel=on
+# ./scripts/install-systemd-user.sh --service=tcp[[;address=127.0.0.1];port=8989] --proxy=uds;<path-to-upstream-socket>;http://127.0.0.1:8989/v1/ws [--xsel=off]
+# ./scripts/install-systemd-user.sh --service=uds;<path-to-main-socket>;http://127.0.0.1:8989/v1/ws --proxy=uds;<path-to-upstream-socket>;http://127.0.0.1:8989/v1/ws [--xsel=off]
+
+
+
 mkdir -p "$UNIT_DIR" "$ENV_DIR" "$BIN_DIR" "$SHARE_SYSTEMD_DIR"
 
 copy_unit_template() {
@@ -47,7 +60,12 @@ do
 done
 
 if [ ! -f "$ENV_DIR/env" ]; then
-	echo -e "cat << EOF\n $(cat ./scripts/systemd/user/rclipboard.env.example)\nEOF" | bash - > "$ENV_DIR/env"
+    echo -e "set -u ; cat << EOF\n $(cat ./scripts/systemd/user/rclipboard.env.example)\nEOF" |
+        env RCLIPBOARD_BIND_ADDR=127.0.0.1 \
+            RCLIPBOARD_BIND_PORT=8989 \
+            RCLIPBOARD_UPSTREAM_ADDR=127.0.0.1 \
+            RCLIPBOARD_UPSTREAM_PORT=8988 \
+            bash -
     echo "Created $ENV_DIR/env (edit as needed)."
 fi
 
