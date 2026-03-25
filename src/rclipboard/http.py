@@ -4,6 +4,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from rclipboard.helpers import clipboard_item_to_topic_data, topic_data_to_clipboard_item
 from rclipboard.types import (
     ClipboardItem,
     ClipGetParams,
@@ -35,19 +36,8 @@ if hasattr(get_logger(__name__), "trace"):
     trace = getattr(get_logger(__name__), "trace")
 
 
-def _topic_data_to_clipboard_item(data: TopicData) -> ClipboardItem:
-    value = data.value.value
-    value_type = data.value.value_type
-    encoding = data.value.value_encoding
-    mime = ("application/octet-stream"
-            if value_type == "binary" else "text/plain")
-    rpc_encoding = "utf-8" if encoding == "plain" else encoding
-    return ClipboardItem(
-        topic=data.topic,
-        value=value,
-        mime=mime,
-        encoding=rpc_encoding,
-    )
+_topic_data_to_clipboard_item = topic_data_to_clipboard_item
+_clipboard_item_to_topic_data = clipboard_item_to_topic_data
 
 
 def _empty_clipboard_item(topic: str) -> ClipboardItem:
@@ -57,25 +47,6 @@ def _empty_clipboard_item(topic: str) -> ClipboardItem:
         mime="text/plain",
         encoding="utf-8",
     )
-
-
-def _clipboard_item_to_topic_data(item: ClipboardItem,
-                                  meta: dict[str, str] | None = None
-                                  ) -> TopicData:
-    value_type = "binary"
-    value_encoding = item.encoding
-    if item.encoding == "utf-8":
-        value_type = "text"
-        value_encoding = "plain"
-    return TopicData.model_validate({
-        "topic": item.topic,
-        "meta": meta or {},
-        "value": {
-            "value": item.value,
-            "type": value_type,
-            "encoding": value_encoding,
-        },
-    })
 
 
 def install_module(app: FastAPI):
@@ -149,7 +120,6 @@ def install_module(app: FastAPI):
             app, body.topic)
         if content is None:
             return ClipGetResult(item=_empty_clipboard_item(body.topic))
-        assert content is not None
         return ClipGetResult(item=_topic_data_to_clipboard_item(content))
 
     @app.post("/v1/clip.put", response_model=ClipPutResult)

@@ -134,7 +134,7 @@ run-https: $(KEY) $(CERT)
 	RCLIPBOARD_PY_LOG_LEVEL=$(RCLIPBOARD_PY_LOG_LEVEL) \
 	RCLIPBOARD_UPSTREAM_ADDR=$(UPSTREAM_HOST) \
 	RCLIPBOARD_UPSTREAM_PORT=$(UPSTREAM_PORT) \
-	RCLUPBOARD_UPSTREAM_UDS=$(UPSTREAM_UDS) \
+	RCLIPBOARD_UPSTREAM_UDS=$(UPSTREAM_UDS) \
 	PYTHONPATH=src .venv/bin/python -m uvicorn rclipboard.main:app --host $(HOST) --port $(PORT) \
 		--ssl-keyfile $(KEY) --ssl-certfile $(CERT) --log-level $(LOG_LEVEL)
 
@@ -144,7 +144,7 @@ run-proxy: .venv
 	RCLIPBOARD_PY_LOG_LEVEL=$(RCLIPBOARD_PY_LOG_LEVEL) \
 	RCLIPBOARD_UPSTREAM_ADDR=$(UPSTREAM_HOST) \
 	RCLIPBOARD_UPSTREAM_PORT=$(UPSTREAM_PORT) \
-	RCLUPBOARD_UPSTREAM_UDS=$(UPSTREAM_UDS) \
+	RCLIPBOARD_UPSTREAM_UDS=$(UPSTREAM_UDS) \
 	PYTHONPATH=src .venv/bin/python -m uvicorn rclipboard.main:app --host $(HOST) --port $(PORT) --log-level $(LOG_LEVEL)
 
 run-proxy-dev: .venv
@@ -155,7 +155,7 @@ run-proxy-dev: .venv
 	RCLIPBOARD_PY_LOG_LEVEL=$(RCLIPBOARD_PY_LOG_LEVEL) \
 	RCLIPBOARD_UPSTREAM_ADDR=$(UPSTREAM_HOST) \
 	RCLIPBOARD_UPSTREAM_PORT=$(UPSTREAM_PORT) \
-	RCLUPBOARD_UPSTREAM_UDS="" \
+	RCLIPBOARD_UPSTREAM_UDS="" \
 	PYTHONPATH=src .venv/bin/python -m uvicorn rclipboard.main:app --host $(HOST) --port 7878 --log-level $(LOG_LEVEL) --reload
 
 cert:

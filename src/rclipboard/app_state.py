@@ -83,7 +83,7 @@ class SetTopicData(SerialCall[None]):
 
     @override
     async def do_call(self, app: "AppState") -> None:
-        await app.proces_put_item(self.topic_data)
+        await app.process_put_item(self.topic_data)
 
 
 class GetTopicData(SerialCall[InternalTopicData | None]):
@@ -98,7 +98,7 @@ class GetTopicData(SerialCall[InternalTopicData | None]):
 
     @override
     async def do_call(self, app: "AppState") -> InternalTopicData | None:
-        item: ItemType = await app.proces_get_item("topic", self.topic)
+        item: ItemType = await app.process_get_item("topic", self.topic)
         if item is None:
             return None
         assert isinstance(item, InternalTopicData)
@@ -123,7 +123,7 @@ class AppState:
         self.dispatcher_task: asyncio.Task[Callable[[], None]] = (asyncio.create_task(
             self.dispatcher(), name="dispatcher"))
 
-    def subsctibe_client(self, client: Interface, topics: list[str]):
+    def subscribe_client(self, client: Interface, topics: list[str]):
         for topic in topics:
             if topic not in self.subs:
                 self.subs[topic] = set()
@@ -160,10 +160,12 @@ class AppState:
         while True:
             try:
                 await self.process_queue()
-            except RuntimeError as e:
-                error(f"Error: {e}")
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                error(f"dispatcher error: {e}", exc_info=True)
 
-    async def _proces_data_item(self, topic_data: InternalTopicData):
+    async def _process_data_item(self, topic_data: InternalTopicData):
         assert isinstance(topic_data, InternalTopicData)
         self.topic_content[topic_data.topic] = topic_data
 
@@ -233,12 +235,12 @@ class AppState:
                 except asyncio.CancelledError:
                     pass
 
-    async def proces_put_item(self, topic_data: InternalTopicData):
+    async def process_put_item(self, topic_data: InternalTopicData):
         # Update content store and fan-out
-        await self._proces_data_item(topic_data)
+        await self._process_data_item(topic_data)
         await self._schedule_notification(topic_data)
 
-    async def proces_get_item(self, subject: str, topic: str) -> ItemType:
+    async def process_get_item(self, subject: str, topic: str) -> ItemType:
         info(f"subject: '{subject}' topic: '{topic}'")
         content = None
         if subject == "topic":
@@ -253,28 +255,12 @@ class AppState:
         return content
 
     async def process_queue(self):
-        try:
-            debug("bus.get -> item")
-            item: GenericSerialCall = await self.bus.get()
-            debug(f"calling item: {item}")
-            await item.call(self)
-            self.bus.task_done()
-        except AssertionError as e:
-            tb = e.__traceback__
-            while tb:
-                error(f"{tb.tb_frame}:{tb.tb_lineno}")
-                tb = tb.tb_next
-            error(f"AssertionError: {e.args}")
-            raise
-        except Exception as e:
-            tb = e.__traceback__
-            while tb:
-                error(f"{tb.tb_frame}:{tb.tb_lineno}")
-                tb = tb.tb_next
-            error(f"Exception '{type(e)}': '{e}'")
-            raise
-
-        debug("process_queue: done.. ")
+        debug("bus.get -> item")
+        item: GenericSerialCall = await self.bus.get()
+        debug(f"calling item: {item}")
+        await item.call(self)
+        self.bus.task_done()
+        debug("process_queue: done")
 
     async def enqueue_request(self, action: str, data: Any) -> TopicData | list[str] | None:
         # warning(f"action: {action} data: {data}")
@@ -308,10 +294,10 @@ class AppState:
         await self.bus.put_nowait(SetTopicData(data, None))
 
 
-def subsctibe_client(app: FastAPI, client: Interface, topics: list[str]):
+def subscribe_client(app: FastAPI, client: Interface, topics: list[str]):
     assert isinstance(app.state.main, AppState)
     main: AppState = app.state.main
-    main.subsctibe_client(client, topics)
+    main.subscribe_client(client, topics)
 
 
 def register_client(app: FastAPI, client: Interface):

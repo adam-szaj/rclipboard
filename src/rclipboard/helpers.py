@@ -5,6 +5,8 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from urllib.parse import urlparse
 
+from rclipboard.types import ClipboardItem, TopicData
+
 
 @dataclass(frozen=True)
 class EndpointConfig:
@@ -82,7 +84,7 @@ def upstream_endpoint_from_env() -> EndpointConfig:
     if endpoint:
         return parse_endpoint(endpoint)
 
-    uds = os.environ.get("RCLIPBOARD_UPSTRAEM_UDS")
+    uds = os.environ.get("RCLIPBOARD_UPSTREAM_UDS")
     if uds:
         return EndpointConfig(scheme="uds", path=uds)
 
@@ -105,6 +107,38 @@ def fifo_dir_from_env() -> str | None:
     if parsed.scheme == "fifo":
         return parsed.path
     return None
+
+
+def topic_data_to_clipboard_item(data: TopicData) -> ClipboardItem:
+    value = data.value.value
+    value_type = data.value.value_type
+    encoding = data.value.value_encoding
+    mime = "application/octet-stream" if value_type == "binary" else "text/plain"
+    rpc_encoding = "utf-8" if encoding == "plain" else encoding
+    return ClipboardItem(
+        topic=data.topic,
+        value=value,
+        mime=mime,
+        encoding=rpc_encoding,
+    )
+
+
+def clipboard_item_to_topic_data(item: ClipboardItem,
+                                 meta: dict[str, str] | None = None) -> TopicData:
+    value_type = "binary"
+    value_encoding = item.encoding
+    if item.encoding == "utf-8":
+        value_type = "text"
+        value_encoding = "plain"
+    return TopicData.model_validate({
+        "topic": item.topic,
+        "meta": meta or {},
+        "value": {
+            "value": item.value,
+            "type": value_type,
+            "encoding": value_encoding,
+        },
+    })
 
 
 def utc_timestamp() -> str:

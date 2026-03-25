@@ -11,7 +11,12 @@ from fastapi import FastAPI
 from websockets.asyncio.client import connect, unix_connect
 
 from rclipboard.app_state import enqueue_topic_data
-from rclipboard.helpers import next_id, upstream_endpoint_from_env
+from rclipboard.helpers import (
+    clipboard_item_to_topic_data,
+    next_id,
+    topic_data_to_clipboard_item,
+    upstream_endpoint_from_env,
+)
 from rclipboard.log import get_logger
 from rclipboard.types import ClipboardItem, TopicData
 
@@ -144,9 +149,11 @@ class ProxyClient:
                     await self._handle_response(decoded)
 
     async def run(self):
+        backoff = 1.0
         while True:
             try:
                 await self.run_loop()
+                backoff = 1.0
             except a.CancelledError:
                 raise
             except Exception as exc:
@@ -155,7 +162,8 @@ class ProxyClient:
                 self.connected = False
                 self.ws = None
                 self.app.state.proxy_connected = False
-            await a.sleep(1.0)
+            await a.sleep(backoff)
+            backoff = min(backoff * 2, 30.0)
 
 
 def _make_ws_url() -> dict[str, object]:
@@ -225,35 +233,5 @@ async def on_local_topic_data(app: FastAPI, topic_data: TopicData,
         debug(f"proxy forward error: {exc}", exc_info=True)
 
 
-def _topic_data_to_clipboard_item(data: TopicData) -> ClipboardItem:
-    value = data.value.value
-    value_type = data.value.value_type
-    encoding = data.value.value_encoding
-    mime = ("application/octet-stream"
-            if value_type == "binary" else "text/plain")
-    rpc_encoding = "utf-8" if encoding == "plain" else encoding
-    return ClipboardItem(
-        topic=data.topic,
-        value=value,
-        mime=mime,
-        encoding=rpc_encoding,
-    )
-
-
-def _clipboard_item_to_topic_data(item: ClipboardItem,
-                                  meta: dict[str, str] | None = None
-                                  ) -> TopicData:
-    value_type = "binary"
-    value_encoding = item.encoding
-    if item.encoding == "utf-8":
-        value_type = "text"
-        value_encoding = "plain"
-    return TopicData.model_validate({
-        "topic": item.topic,
-        "meta": meta or {},
-        "value": {
-            "value": item.value,
-            "type": value_type,
-            "encoding": value_encoding,
-        },
-    })
+_topic_data_to_clipboard_item = topic_data_to_clipboard_item
+_clipboard_item_to_topic_data = clipboard_item_to_topic_data

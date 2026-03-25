@@ -13,7 +13,11 @@ import aiofiles as af
 from fastapi import FastAPI
 
 from rclipboard.app_state import enqueue_request_topics, enqueue_topic_data
-from rclipboard.helpers import fifo_dir_from_env
+from rclipboard.helpers import (
+    clipboard_item_to_topic_data,
+    fifo_dir_from_env,
+    topic_data_to_clipboard_item,
+)
 from rclipboard.log import get_logger
 from rclipboard.types import (
     ClipboardItem,
@@ -36,36 +40,8 @@ DEFAULT_TOPICS = ["c", "p", "s"]
 DEFAULT_TOPICS_SET = set(DEFAULT_TOPICS)
 
 
-def _topic_data_to_clipboard_item(data: TopicData) -> ClipboardItem:
-    value = data.value.value
-    value_type = data.value.value_type
-    encoding = data.value.value_encoding
-    mime = ("application/octet-stream" if value_type == "binary" else "text/plain")
-    rpc_encoding = "utf-8" if encoding == "plain" else encoding
-    return ClipboardItem(
-        topic=data.topic,
-        value=value,
-        mime=mime,
-        encoding=rpc_encoding,
-    )
-
-
-def _clipboard_item_to_topic_data(item: ClipboardItem,
-                                  meta: dict[str, str] | None = None) -> TopicData:
-    value_type = "binary"
-    value_encoding = item.encoding
-    if item.encoding == "utf-8":
-        value_type = "text"
-        value_encoding = "plain"
-    return TopicData.model_validate({
-        "topic": item.topic,
-        "meta": meta or {},
-        "value": {
-            "value": item.value,
-            "type": value_type,
-            "encoding": value_encoding,
-        },
-    })
+_topic_data_to_clipboard_item = topic_data_to_clipboard_item
+_clipboard_item_to_topic_data = clipboard_item_to_topic_data
 
 
 def _topic_data_to_bytes(data: TopicData) -> bytes:
@@ -113,12 +89,14 @@ def _snapshot_paths(root: Path) -> dict[str, Path]:
 async def _write_atomic(path: Path, payload: bytes) -> None:
     tmp: Path = path.with_name(f".{path.name}.tmp.{os.getpid()}")
     info(f"path: '{path}', tmp: '{tmp}' content: '{payload.decode('utf-8')}'")
-    async with af.open(tmp, "w+b") as f:
-        await f.write(payload)
 
-    if tmp.exists():
-        tmp.chmod(0o400)
-        os.replace(tmp, path)
+    def _owner_only(p, flags):
+        return os.open(p, flags, 0o600)
+
+    async with af.open(tmp, "w+b", opener=_owner_only) as f:
+        await f.write(payload)
+    tmp.chmod(0o400)
+    os.replace(tmp, path)
 
 
 def _ensure_fifo(path: Path) -> None:

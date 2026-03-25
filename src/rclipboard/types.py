@@ -1,8 +1,11 @@
 import asyncio as a
+import re
 from abc import ABC, abstractmethod
 from typing import Annotated, Literal, override
 
-from pydantic import BaseModel, ConfigDict, Field, JsonValue
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator
+
+_TOPIC_RE = re.compile(r'^[a-zA-Z0-9_-]{1,64}$')
 
 
 class Interface(ABC):
@@ -26,7 +29,7 @@ class Interface(ABC):
 class BidirectionalInterface(Interface):
     def __init__(self):
         super().__init__()
-        self.topics: list[str] = []
+        self.topics: set[str] = set()
 
     @abstractmethod
     async def send(self, data: object):
@@ -50,6 +53,13 @@ class TopicData(BaseModel):
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
+    @field_validator('topic')
+    @classmethod
+    def validate_topic(cls, v: str) -> str:
+        if not _TOPIC_RE.match(v):
+            raise ValueError(f"invalid topic name: {v!r} (must match {_TOPIC_RE.pattern})")
+        return v
+
 
 class DigestInfo(BaseModel):
     algo: str
@@ -63,6 +73,13 @@ class ClipboardItem(BaseModel):
     encoding: Literal["utf-8", "base64", "json"] = "base64"
     size: int | None = None
     digest: DigestInfo | None = None
+
+    @field_validator('topic')
+    @classmethod
+    def validate_topic(cls, v: str) -> str:
+        if not _TOPIC_RE.match(v):
+            raise ValueError(f"invalid topic name: {v!r} (must match {_TOPIC_RE.pattern})")
+        return v
 
 
 class RPCError(BaseModel):

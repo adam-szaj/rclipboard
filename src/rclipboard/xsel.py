@@ -12,7 +12,7 @@ from fastapi import FastAPI
 from rclipboard.app_state import (
     enqueue_topic_data,
     register_client,
-    subsctibe_client,
+    subscribe_client,
 )
 from rclipboard.helpers import utc_timestamp
 from rclipboard.log import get_logger
@@ -288,7 +288,7 @@ def install_xsel(app: FastAPI) -> None:
     conn = XselInterface(app)
     app.state.xsel = conn
     register_client(app, conn)
-    subsctibe_client(app, conn, list(TOPIC_TO_XSEL.keys()))
+    subscribe_client(app, conn, list(TOPIC_TO_XSEL.keys()))
 
 
 async def shutdown_xsel(app: FastAPI) -> None:

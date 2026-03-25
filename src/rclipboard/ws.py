@@ -11,10 +11,11 @@ from .app_state import (
     enqueue_request_topics,
     enqueue_topic_data,
     register_client,
-    subsctibe_client,
+    subscribe_client,
     unregister_client,
     unsubscribe_client,
 )
+from .helpers import clipboard_item_to_topic_data, topic_data_to_clipboard_item
 from .log import get_logger as gl
 from .types import (
     BidirectionalInterface,
@@ -136,7 +137,7 @@ class WSServerConnection(BidirectionalInterface):
             topic for topic in params.topics if topic not in self.topics
         ]
         if new_topics:
-            subsctibe_client(self.app, self, new_topics)
+            subscribe_client(self.app, self, new_topics)
             self.topics.update(new_topics)
         return ClipWatchResult(topics=sorted(self.topics))
 
@@ -275,41 +276,8 @@ class RPCMethodError(Exception):
         self.data = data
 
 
-def _topic_data_to_clipboard_item(data: TopicData) -> ClipboardItem:
-    value = data.value.value
-    value_type = data.value.value_type
-    encoding = data.value.value_encoding
-    mime = (
-        "application/octet-stream" if value_type == "binary" else "text/plain"
-    )
-    rpc_encoding = "utf-8" if encoding == "plain" else encoding
-    return ClipboardItem(
-        topic=data.topic,
-        value=value,
-        mime=mime,
-        encoding=rpc_encoding,
-    )
-
-
-def _clipboard_item_to_topic_data(
-    item: ClipboardItem, meta: dict[str, str] | None = None
-) -> TopicData:
-    value_type = "binary"
-    value_encoding = item.encoding
-    if item.encoding == "utf-8":
-        value_type = "text"
-        value_encoding = "plain"
-    return TopicData.model_validate(
-        {
-            "topic": item.topic,
-            "meta": meta or {},
-            "value": {
-                "value": item.value,
-                "type": value_type,
-                "encoding": value_encoding,
-            },
-        }
-    )
+_topic_data_to_clipboard_item = topic_data_to_clipboard_item
+_clipboard_item_to_topic_data = clipboard_item_to_topic_data
 
 
 async def install_module(app: FastAPI) -> None:
