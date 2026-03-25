@@ -25,6 +25,7 @@ ItemType = InternalTopicData | list[str] | dict[str, str] | None
 
 
 class Bus(Generic[T]):
+
     def __init__(self, **kwargs):
         self.q: asyncio.Queue[T] = asyncio.Queue[T](**kwargs)
 
@@ -48,6 +49,7 @@ class Bus(Generic[T]):
 
 
 class SerialCall(ABC, Generic[T]):
+
     def __init__(self, future: asyncio.Future[T] | None = None):
         if future is None:
             future = asyncio.Future()
@@ -70,6 +72,7 @@ class SerialCall(ABC, Generic[T]):
 
 
 class SetTopicData(SerialCall[None]):
+
     def __init__(
         self,
         topic_data: InternalTopicData,
@@ -84,6 +87,7 @@ class SetTopicData(SerialCall[None]):
 
 
 class GetTopicData(SerialCall[InternalTopicData | None]):
+
     def __init__(
         self,
         topic: str,
@@ -105,21 +109,19 @@ GenericSerialCall = GetTopicData | SetTopicData
 
 
 class AppState:
+
     def __init__(self, app: FastAPI):
         self.app: FastAPI = app
         self.bus: Bus[GenericSerialCall] = Bus[GenericSerialCall]()
         self.clients: list[Interface] = []
         self.topic_content: dict[str, InternalTopicData] = {}
         self.subs: dict[str, set[Interface]] = {}
-        self.notify_delay_ms: int = int(
-            os.environ.get("RCLIPBOARD_NOTIFY_DELAY_MS", "250")
-        )
+        self.notify_delay_ms: int = int(os.environ.get("RCLIPBOARD_NOTIFY_DELAY_MS", "250"))
         self.pending_notifications: dict[str, InternalTopicData] = {}
         self.notification_tasks: dict[str, asyncio.Task[None]] = {}
         self.notification_lock = asyncio.Lock()
-        self.dispatcher_task: asyncio.Task[Callable[[], None]] = (
-            asyncio.create_task(self.dispatcher(), name="dispatcher")
-        )
+        self.dispatcher_task: asyncio.Task[Callable[[], None]] = (asyncio.create_task(
+            self.dispatcher(), name="dispatcher"))
 
     def subsctibe_client(self, client: Interface, topics: list[str]):
         for topic in topics:
@@ -197,9 +199,7 @@ class AppState:
                 if current is asyncio.current_task():
                     self.notification_tasks.pop(topic, None)
 
-    async def _schedule_notification(
-        self, topic_data: InternalTopicData
-    ) -> None:
+    async def _schedule_notification(self, topic_data: InternalTopicData) -> None:
         if self.notify_delay_ms <= 0:
             await self._notify_topic_data(topic_data)
             return
@@ -207,12 +207,10 @@ class AppState:
             self.pending_notifications[topic_data.topic] = topic_data
             task = self.notification_tasks.get(topic_data.topic)
             if task is None or task.done():
-                self.notification_tasks[topic_data.topic] = (
-                    asyncio.create_task(
-                        self._delayed_notify(topic_data.topic),
-                        name=f"notify_{topic_data.topic}",
-                    )
-                )
+                self.notification_tasks[topic_data.topic] = (asyncio.create_task(
+                    self._delayed_notify(topic_data.topic),
+                    name=f"notify_{topic_data.topic}",
+                ))
 
     async def flush_topic_notification(self, topic: str) -> None:
         async with self.notification_lock:
@@ -246,11 +244,7 @@ class AppState:
         if subject == "topic":
             assert topic
             content = self.topic_content.get(topic)
-            info(
-                f"found content for topic '{topic}': '{content}' from: '{
-                    self.topic_content
-                }'"
-            )
+            debug(f"found content for topic '{topic}': '{content}' from: '{self.topic_content}'")
         elif subject == "topics":
             content = list(self.topic_content.keys())
         else:
@@ -260,9 +254,11 @@ class AppState:
 
     async def process_queue(self):
         try:
+            debug("bus.get -> item")
             item: GenericSerialCall = await self.bus.get()
-            self.bus.task_done()
+            debug(f"calling item: {item}")
             await item.call(self)
+            self.bus.task_done()
         except AssertionError as e:
             tb = e.__traceback__
             while tb:
@@ -278,11 +274,9 @@ class AppState:
             error(f"Exception '{type(e)}': '{e}'")
             raise
 
-        print("process_queue: done.. ")
+        debug("process_queue: done.. ")
 
-    async def enqueue_request(
-        self, action: str, data: Any
-    ) -> TopicData | list[str] | None:
+    async def enqueue_request(self, action: str, data: Any) -> TopicData | list[str] | None:
         # warning(f"action: {action} data: {data}")
         # if not data:
         #     traceback.print_stack()
@@ -295,9 +289,7 @@ class AppState:
                 await self.bus.put(req)
                 debug("wait for future")
                 await req.future
-                internal_topic_data: InternalTopicData | None = (
-                    req.future.result()
-                )
+                internal_topic_data: InternalTopicData | None = (req.future.result())
                 if internal_topic_data:
                     return internal_topic_data.data
             if action.endswith(":topics"):
@@ -358,9 +350,8 @@ async def enqueue_request_topics(app: FastAPI) -> list[str] | None:
     return result
 
 
-async def enqueue_topic_data(
-    app: FastAPI, data: TopicData, source: Interface | None
-) -> InternalTopicData:
+async def enqueue_topic_data(app: FastAPI, data: TopicData,
+                             source: Interface | None) -> InternalTopicData:
     internal_topic_data = InternalTopicData(data=data, source=source)
     assert isinstance(app.state.main, AppState)
     main: AppState = app.state.main
@@ -368,9 +359,7 @@ async def enqueue_topic_data(
     return internal_topic_data
 
 
-async def enqueue_topic_data_nowait(
-    app: FastAPI, data: TopicData, source: Interface | None
-):
+async def enqueue_topic_data_nowait(app: FastAPI, data: TopicData, source: Interface | None):
     internal_topic_data = InternalTopicData(data=data, source=source)
     await app.state.main.enqueue_topic_data_nowait(internal_topic_data)
     return internal_topic_data

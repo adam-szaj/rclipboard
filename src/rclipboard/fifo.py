@@ -40,9 +40,7 @@ def _topic_data_to_clipboard_item(data: TopicData) -> ClipboardItem:
     value = data.value.value
     value_type = data.value.value_type
     encoding = data.value.value_encoding
-    mime = (
-        "application/octet-stream" if value_type == "binary" else "text/plain"
-    )
+    mime = ("application/octet-stream" if value_type == "binary" else "text/plain")
     rpc_encoding = "utf-8" if encoding == "plain" else encoding
     return ClipboardItem(
         topic=data.topic,
@@ -52,25 +50,22 @@ def _topic_data_to_clipboard_item(data: TopicData) -> ClipboardItem:
     )
 
 
-def _clipboard_item_to_topic_data(
-    item: ClipboardItem, meta: dict[str, str] | None = None
-) -> TopicData:
+def _clipboard_item_to_topic_data(item: ClipboardItem,
+                                  meta: dict[str, str] | None = None) -> TopicData:
     value_type = "binary"
     value_encoding = item.encoding
     if item.encoding == "utf-8":
         value_type = "text"
         value_encoding = "plain"
-    return TopicData.model_validate(
-        {
-            "topic": item.topic,
-            "meta": meta or {},
-            "value": {
-                "value": item.value,
-                "type": value_type,
-                "encoding": value_encoding,
-            },
-        }
-    )
+    return TopicData.model_validate({
+        "topic": item.topic,
+        "meta": meta or {},
+        "value": {
+            "value": item.value,
+            "type": value_type,
+            "encoding": value_encoding,
+        },
+    })
 
 
 def _topic_data_to_bytes(data: TopicData) -> bytes:
@@ -81,23 +76,21 @@ def _topic_data_to_bytes(data: TopicData) -> bytes:
         return base64.b64decode(value)
     if data.value.value_encoding == "hex":
         return bytes.fromhex(value)
-    raise ValueError(
-        f"unsupported value encoding: {data.value.value_encoding}"
-    )
+    raise ValueError(f"unsupported value encoding: {data.value.value_encoding}")
 
 
 def _raw_bytes_to_topic_data(topic: str, payload: bytes) -> TopicData:
-    return TopicData.model_validate(
-        {
-            "topic": topic,
-            "meta": {"app": "fifo"},
-            "value": {
-                "value": base64.b64encode(payload).decode("ascii"),
-                "type": "binary",
-                "encoding": "base64",
-            },
-        }
-    )
+    return TopicData.model_validate({
+        "topic": topic,
+        "meta": {
+            "app": "fifo"
+        },
+        "value": {
+            "value": base64.b64encode(payload).decode("ascii"),
+            "type": "binary",
+            "encoding": "base64",
+        },
+    })
 
 
 def _topic_paths(root: Path, topic: str) -> dict[str, Path]:
@@ -119,10 +112,13 @@ def _snapshot_paths(root: Path) -> dict[str, Path]:
 
 async def _write_atomic(path: Path, payload: bytes) -> None:
     tmp: Path = path.with_name(f".{path.name}.tmp.{os.getpid()}")
+    info(f"path: '{path}', tmp: '{tmp}' content: '{payload.decode('utf-8')}'")
     async with af.open(tmp, "w+b") as f:
         await f.write(payload)
-    tmp.chmod(0o400)
-    os.replace(tmp, path)
+
+    if tmp.exists():
+        tmp.chmod(0o400)
+        os.replace(tmp, path)
 
 
 def _ensure_fifo(path: Path) -> None:
@@ -139,6 +135,7 @@ async def _read_fifo_bytes(path: Path) -> bytes:
 
 
 class FIFOTransport:
+
     def __init__(self, app: FastAPI, root: Path):
         self.app = app
         self.root = root
@@ -172,12 +169,8 @@ class FIFOTransport:
         _ensure_fifo(paths["put_raw"])
         _ensure_fifo(paths["put_json"])
         self.reader_tasks[topic] = (
-            a.create_task(
-                self.raw_reader_loop(topic), name=f"fifo_raw_{topic}"
-            ),
-            a.create_task(
-                self.json_reader_loop(topic), name=f"fifo_json_{topic}"
-            ),
+            a.create_task(self.raw_reader_loop(topic), name=f"fifo_raw_{topic}"),
+            a.create_task(self.json_reader_loop(topic), name=f"fifo_json_{topic}"),
         )
 
     async def raw_reader_loop(self, topic: str) -> None:
@@ -187,7 +180,6 @@ class FIFOTransport:
             if not payload:
                 continue
             try:
-                debug("enqueue_topic_data")
                 await enqueue_topic_data(
                     self.app,
                     _raw_bytes_to_topic_data(topic, payload),
@@ -206,19 +198,12 @@ class FIFOTransport:
             if not payload:
                 continue
             try:
-                params = ClipPutParams.model_validate_json(
-                    payload.decode("utf-8")
-                )
+                params = ClipPutParams.model_validate_json(payload.decode("utf-8"))
                 if len(params.items) != 1:
                     raise ValueError("fifo json put expects exactly one item")
                 item = params.items[0]
                 if item.topic != topic:
-                    raise ValueError(
-                        f"fifo json put topic mismatch: {item.topic} != {
-                            topic
-                        }"
-                    )
-                debug("enqueue_topic_data")
+                    raise ValueError(f"fifo json put topic mismatch: {item.topic} != {topic}")
                 await enqueue_topic_data(
                     self.app,
                     _clipboard_item_to_topic_data(item, meta=params.meta),
@@ -246,14 +231,9 @@ class FIFOTransport:
                 ok=True,
                 xsel_enabled=bool(xsel["enabled"]),
                 xsel_good=bool(xsel["good"]),
-            )
-            .model_dump_json()
-            .encode("utf-8"),
+            ).model_dump_json().encode("utf-8"),
         )
-        clients = [
-            client.name
-            for client in getattr(self.app.state.main, "clients", [])
-        ]
+        clients = [client.name for client in getattr(self.app.state.main, "clients", [])]
         await self._write_snapshot_if_changed(
             "status",
             snapshots["status"],
@@ -262,9 +242,7 @@ class FIFOTransport:
                 topics=topics,
                 clients=clients,
                 xsel=xsel,
-            )
-            .model_dump_json()
-            .encode("utf-8"),
+            ).model_dump_json().encode("utf-8"),
         )
 
     async def _write_snapshot_if_changed(
@@ -278,40 +256,25 @@ class FIFOTransport:
         await _write_atomic(path, payload)
         self.snapshot_cache[name] = payload
 
-    async def on_topic_data(
-        self, _app: FastAPI, topic_data: TopicData, _source: Any
-    ) -> None:
+    async def on_topic_data(self, _app: FastAPI, topic_data: TopicData, _source: Any) -> None:
         if topic_data.topic not in DEFAULT_TOPICS_SET:
-            debug(
-                f"fifo ignored state update for unsupported topic: {
-                    topic_data.topic
-                }"
-            )
+            debug(f"fifo ignored state update for unsupported topic: {topic_data.topic}")
             return
         self.ensure_topic(topic_data.topic)
         paths = _topic_paths(self.root, topic_data.topic)
         info(f"paths: {paths}")
         try:
-            await _write_atomic(
-                paths["state_raw"], _topic_data_to_bytes(topic_data)
-            )
+            await _write_atomic(paths["state_raw"], _topic_data_to_bytes(topic_data))
             await _write_atomic(
                 paths["state_json"],
-                ClipGetResult(item=_topic_data_to_clipboard_item(topic_data))
-                .model_dump_json()
-                .encode("utf-8"),
+                ClipGetResult(item=_topic_data_to_clipboard_item(
+                    topic_data)).model_dump_json().encode("utf-8"),
             )
             await self.refresh_snapshots()
         except (ValueError, binascii.Error) as exc:
-            warning(
-                f"fifo snapshot update failed for topic={topic_data.topic}: {
-                    exc
-                }"
-            )
+            warning(f"fifo snapshot update failed for topic={topic_data.topic}: {exc}")
 
-    async def on_runtime_state_change(
-        self, _app: FastAPI, _reason: str
-    ) -> None:
+    async def on_runtime_state_change(self, _app: FastAPI, _reason: str) -> None:
         await self.refresh_snapshots()
 
 
@@ -327,22 +290,16 @@ def install_fifo(app: FastAPI) -> None:
     app.state.fifo_transport = transport
     app.state.local_topic_data_hooks.append(transport.on_topic_data)
     app.state.runtime_state_hooks.append(transport.on_runtime_state_change)
-    app.state.fifo_start_task = a.create_task(
-        transport.start(), name="fifo_start"
-    )
+    app.state.fifo_start_task = a.create_task(transport.start(), name="fifo_start")
 
 
 async def shutdown_fifo(app: FastAPI) -> None:
-    start_task: a.Task[None] | None = getattr(
-        app.state, "fifo_start_task", None
-    )
+    start_task: a.Task[None] | None = getattr(app.state, "fifo_start_task", None)
     if start_task:
         with contextlib.suppress(a.CancelledError):
             await start_task
         app.state.fifo_start_task = None
-    transport: FIFOTransport | None = getattr(
-        app.state, "fifo_transport", None
-    )
+    transport: FIFOTransport | None = getattr(app.state, "fifo_transport", None)
     if transport is None:
         return
     await transport.stop()

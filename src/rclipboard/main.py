@@ -34,7 +34,7 @@ async def startup(app: FastAPI):
 
     fifo_mod.install_fifo(app)
     # optional xsel poller
-    if os.environ.get("RCLIPBOARD_XSEL", "0") != 0:
+    if os.environ.get("RCLIPBOARD_XSEL", "0") != "0":
         xsel_mod.install_xsel(app)
     # optional proxy
     proxy_mod.install_proxy(app)
@@ -42,7 +42,9 @@ async def startup(app: FastAPI):
 
 async def shutdown(app: FastAPI):
     await proxy_mod.shutdown_proxy(app)
-    await xsel_mod.shutdown_xsel(app)
+
+    if os.environ.get("RCLIPBOARD_XSEL", "0") != "0":
+       await xsel_mod.shutdown_xsel(app)
     await fifo_mod.shutdown_fifo(app)
 
     task = getattr(app.state.main, "dispatcher_task", None)
