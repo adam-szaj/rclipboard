@@ -95,7 +95,8 @@ async def _write_atomic(path: Path, payload: bytes) -> None:
 
     async with af.open(tmp, "w+b", opener=_owner_only) as f:
         await f.write(payload)
-    tmp.chmod(0o400)
+    if tmp.exists():
+        tmp.chmod(0o400)
     os.replace(tmp, path)
 
 

@@ -5,8 +5,9 @@ import contextlib
 import json
 import os
 from logging import Logger
-from typing import Any
+from typing import Any, override
 
+from pydantic import JsonValue
 from fastapi import FastAPI
 from websockets.asyncio.client import connect, unix_connect
 
@@ -18,7 +19,7 @@ from rclipboard.helpers import (
     upstream_endpoint_from_env,
 )
 from rclipboard.log import get_logger
-from rclipboard.types import ClipboardItem, TopicData
+from rclipboard.types import ClipboardItem, TopicData, ClipWatchResult, BidirectionalInterface
 
 logger: Logger = get_logger(__name__)
 error = logger.error
@@ -30,7 +31,7 @@ trace = logger.debug
 DEFAULT_TOPICS = ["c", "p", "s"]
 
 
-class ProxyClient:
+class ProxyClient(BidirectionalInterface):
     """
     Local proxy agent that maintains one upstream WS connection.
 
@@ -50,18 +51,27 @@ class ProxyClient:
         url: str,
         unix: bool = False,
         path: str = "",
-        topics: list[str] | None = None,
+        topics: list[str] | set[str] | None = None,
     ):
         self.app = app
         self.url = url
         self.path = path
         self.unix = unix
         self.ws: Any = None
-        self.topics = topics or list(DEFAULT_TOPICS)
+        self.topics = set(topics or DEFAULT_TOPICS)
         self.connected = False
         self._watch_id: int | str | None = None
 
-    async def _send_json(self, payload: dict[str, object]) -> None:
+    @property
+    @override
+    def name(self) -> str:
+        return "ProxyClient"
+
+    @override
+    async def send(self, data: dict[str, JsonValue]):
+        await self._send_json(data)
+
+    async def _send_json(self, payload: dict[str, JsonValue]) -> None:
         if self.ws is None:
             raise RuntimeError("proxy websocket is not connected")
         await self.ws.send(json.dumps(payload))
@@ -73,13 +83,11 @@ class ProxyClient:
             "id": self._watch_id,
             "method": "clip.watch",
             "params": {
-                "topics": self.topics,
+                "topics": list(self.topics),
             },
         })
 
-    async def send_clip(self,
-                        item: ClipboardItem,
-                        meta: dict[str, str] | None = None):
+    async def send_clip(self, item: ClipboardItem, meta: dict[str, JsonValue] | None = None):
         if not self.connected:
             return
         await self._send_json({
@@ -92,14 +100,20 @@ class ProxyClient:
             },
         })
 
-    async def _handle_response(self, message: dict[str, object]) -> None:
+    async def _handle_response(self, message: dict[str, JsonValue]) -> None:
         message_id = message.get("id")
         if message_id == self._watch_id:
             if "error" in message:
-                warning(
-                    f"proxy watch rejected by upstream: {message['error']}")
+                warning(f"proxy watch rejected by upstream: {message['error']}")
             else:
                 info(f"proxy subscribed upstream topics: {self.topics}")
+                result = ClipWatchResult.model_validate(message.get("result"))
+                for _, topic_data in result.contents.items():
+                    await enqueue_topic_data(
+                        self.app,
+                        data=topic_data,
+                        source=self,
+                    )
 
     async def _handle_event(self, message: dict[str, object]) -> None:
         if message.get("method") != "clip.changed":
@@ -121,12 +135,11 @@ class ProxyClient:
             )
 
     async def run_loop(self):
-        connect_kwargs: dict[str, object] = {}
         ws_cm: Any
         if self.unix:
             ws_cm = unix_connect(path=self.path, uri=self.url)
         else:
-            ws_cm = connect(self.url, **connect_kwargs)
+            ws_cm = connect(self.url)
 
         async with ws_cm as ws:
             self.ws = ws
@@ -175,8 +188,7 @@ def _make_ws_url() -> dict[str, object]:
             "unix": True,
         }
     if endpoint.scheme == "fifo":
-        raise ValueError(
-            "fifo endpoints are not supported for proxy upstream connections")
+        raise ValueError("fifo endpoints are not supported for proxy upstream connections")
     if endpoint.scheme in {"https", "wss"}:
         return {"url": f"wss://{endpoint.host}:{endpoint.port}/ws"}
     return {"url": f"ws://{endpoint.host}:{endpoint.port}/ws"}
@@ -208,8 +220,7 @@ async def shutdown_proxy(app: FastAPI) -> None:
     app.state.proxy_connected = False
 
 
-async def on_local_topic_data(app: FastAPI, topic_data: TopicData,
-                              source: Any) -> None:
+async def on_local_topic_data(app: FastAPI, topic_data: TopicData, source: Any) -> None:
     """
     Forward locally accepted clipboard updates to the upstream server.
 

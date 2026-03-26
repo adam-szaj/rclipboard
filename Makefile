@@ -98,7 +98,7 @@ run-test-dev: .venv
 	RCLIPBOARD_BIND_ADDR=$(HOST) \
 	RCLIPBOARD_BIND_PORT=$(TEST_PORT) \
 	RCLIPBOARD_XSEL=0 \
-	uvicorn rclipboard.main:app --host $(HOST) --port $(TEST_PORT) --log-level $(LOG_LEVEL) --reload
+	PYTHONPATH=src uvicorn rclipboard.main:app --host $(HOST) --port $(TEST_PORT) --log-level $(LOG_LEVEL) --reload
 
 run-smoke-clip: .venv
 	date | ./scripts/rclipctl clip -c --host $(HOST) --port $(TEST_PORT) --uds ""
@@ -121,6 +121,7 @@ run-uds: .venv
 
 run-uds-dev: .venv
 	RCLIPBOARD_PROXY=0 \
+	RCLIPBOARD_XSEL=0 \
 	RCLIPBOARD_LOG_LEVEL=$(RCLIPBOARD_LOG_LEVEL) \
 	RCLIPBOARD_PY_LOG_LEVEL=$(RCLIPBOARD_PY_LOG_LEVEL) \
 	RCLIPBOARD_UPSTREAM_ADDR=$(UPSTREAM_HOST) \
@@ -235,7 +236,7 @@ systemd-user-enable-socket:
 	systemctl --user enable --now rclipboard.socket
 
 systemd-user-disable:
-	-systemctl --user disable --now rclipboard.service rclipboard-proxy.service rclipboard.socket || true
+	systemctl --user disable --now rclipboard.service rclipboard-proxy.service rclipboard.socket || true
 
 nvim-plugin-install:
 	cd nvim-rclipboard && luarocks make --local nvim-rclipboard-0.1.0-1.rockspec

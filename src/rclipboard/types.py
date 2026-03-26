@@ -17,10 +17,6 @@ class Interface(ABC):
     def name(self) -> str:
         pass
 
-    # @abstractmethod
-    # async def send(self, data: object):
-    #     pass
-
     @override
     def __repr__(self) -> str:
         return f"Interface[{self.name}]"
@@ -32,7 +28,7 @@ class BidirectionalInterface(Interface):
         self.topics: set[str] = set()
 
     @abstractmethod
-    async def send(self, data: object):
+    async def send(self, data: dict[str, JsonValue]):
         pass
 
     pass
@@ -110,7 +106,7 @@ class ClipWatchParams(BaseModel):
 
 
 class ClipWatchResult(BaseModel):
-    topics: list[str]
+    contents: dict[str, TopicData]
 
 
 class TopicsListParams(BaseModel):

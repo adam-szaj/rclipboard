@@ -123,12 +123,17 @@ class AppState:
         self.dispatcher_task: asyncio.Task[Callable[[], None]] = (asyncio.create_task(
             self.dispatcher(), name="dispatcher"))
 
-    def subscribe_client(self, client: Interface, topics: list[str]):
+    def subscribe_client(self, client: Interface, topics: list[str]) -> dict[str, TopicData]:
+        contents: dict[str, TopicData] = dict()
         for topic in topics:
             if topic not in self.subs:
                 self.subs[topic] = set()
             self.subs[topic].add(client)
+            content = self.topic_content.get(topic)
+            if content:
+                contents[topic] = content.data
         self._emit_runtime_state_change("subscriptions")
+        return contents
 
     def unsubscribe_client(self, client: Interface, topics: list[str]):
         for topic in topics:
@@ -294,10 +299,10 @@ class AppState:
         await self.bus.put_nowait(SetTopicData(data, None))
 
 
-def subscribe_client(app: FastAPI, client: Interface, topics: list[str]):
+def subscribe_client(app: FastAPI, client: Interface, topics: list[str]) -> dict[str, TopicData]:
     assert isinstance(app.state.main, AppState)
     main: AppState = app.state.main
-    main.subscribe_client(client, topics)
+    return main.subscribe_client(client, topics)
 
 
 def register_client(app: FastAPI, client: Interface):
