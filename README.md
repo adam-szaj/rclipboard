@@ -421,6 +421,98 @@ This target:
 - verifies `upstream -> proxy`
 - verifies `proxy -> upstream`
 
+## SSH Tunnel (`rclipboard-tunel`)
+
+`rclipboard-tunel` is a wrapper around `ssh -R` / `ssh -L` that creates a tunnel
+between a local rclipboard endpoint and a remote host.  All four socket-type
+combinations are supported:
+
+| Local | Remote | Direction |
+|-------|--------|-----------|
+| TCP   | TCP    | `ssh -R remote_host:remote_port:local_host:local_port` |
+| UDS   | TCP    | `ssh -R remote_host:remote_port:local_socket` |
+| TCP   | UDS    | `ssh -R remote_socket:local_host:local_port` |
+| UDS   | UDS    | `ssh -R remote_socket:local_socket` |
+
+UDS forwarding requires **OpenSSH ≥ 6.7** on both the client and the server.
+
+### Required sshd configuration on the remote host
+
+Add (or verify) the following lines in `/etc/ssh/sshd_config` on the remote server:
+
+```
+# Allow TCP port forwarding (needed for TCP remote endpoints)
+AllowTcpForwarding yes
+
+# Allow Unix Domain Socket forwarding (needed for UDS remote endpoints)
+# Requires OpenSSH ≥ 6.7
+AllowStreamLocalForwarding yes
+
+# Auto-remove stale UDS socket files left by previous tunnel sessions
+StreamLocalBindUnlink yes
+
+# Let the client choose the bind address for remote forwards.
+# Without this, OpenSSH forces the remote listen address to 127.0.0.1,
+# which is usually fine, but explicit "host:port" specs in -R require it.
+GatewayPorts clientspecified
+```
+
+Reload sshd after editing:
+
+```bash
+# systemd
+sudo systemctl reload sshd
+
+# OpenRC
+sudo rc-service sshd reload
+```
+
+### Usage examples
+
+Share a local UDS server with the remote machine (remote proxy connects via TCP):
+
+```bash
+rclipboard-tunel \
+  --local  uds:///run/user/1000/rclipboard/uds.sock \
+  --remote tcp:127.0.0.1:8988 \
+  --ssh    user@remotehost
+```
+
+Share a local TCP server with the remote machine via a remote UDS socket:
+
+```bash
+rclipboard-tunel \
+  --local  tcp:127.0.0.1:8989 \
+  --remote uds:///run/user/1000/rclipboard/proxy.sock \
+  --ssh    user@remotehost
+```
+
+Forward a remote TCP server to a local UDS socket (`--forward` = `ssh -L`):
+
+```bash
+rclipboard-tunel \
+  --local  uds:///run/user/1000/rclipboard/proxy.sock \
+  --remote tcp:127.0.0.1:8989 \
+  --ssh    user@remotehost \
+  --forward
+```
+
+Run in the background and read settings from `config.toml`:
+
+```bash
+rclipboard-tunel \
+  --ssh user@remotehost \
+  --config ~/.config/rclipboard/config.toml \
+  --daemonize
+```
+
+### TOML configuration
+
+`rclipboard-tunel` reads the same `config.toml` as the server when `--config` is
+given, or sources `~/.config/rclipboard/env` when that file exists.  The relevant
+fields are `server.endpoint` (used as the default `--local` value) and the proxy
+`upstream_endpoint` port (used as the default `--remote` TCP port).
+
 ## Makefile
 
 Most important targets:
@@ -436,6 +528,8 @@ Most important targets:
 - `make test-http`
 - `make test-ws`
 - `make test-proxy-integration`
+- `make docker-build-tunel-test` — build the SSH test image (required once before `test-tunel`)
+- `make test-tunel` — SSH tunnel smoke tests (requires Docker)
 
 ## Tests
 
@@ -444,6 +538,7 @@ Automated tests live in `tests/`:
 - functional HTTP tests
 - functional WebSocket tests
 - proxy integration tests
+- SSH tunnel integration tests (require Docker)
 
 Run all tests:
 
@@ -457,7 +552,15 @@ Or run them individually:
 make test-http
 make test-ws
 make test-proxy-integration
+
+# SSH tunnel tests — build the test image first:
+make docker-build-tunel-test
+make test-tunel
 ```
+
+The tunnel tests start a Docker container with `openssh-server` and verify all four
+socket-type combinations (`tcp→tcp`, `uds→tcp`, `tcp→uds`, `uds→uds`).  They skip
+gracefully when Docker is not available or the test image has not been built.
 
 ## Environment Configuration
 
