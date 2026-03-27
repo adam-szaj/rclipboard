@@ -19,8 +19,9 @@ RCLIPBOARD_PY_LOG_LEVEL := INFO
 
 # Docker
 IMAGE ?= rclipboard:latest
+TUNEL_TEST_IMAGE ?= rclipboard-tunel-test:latest
 
-.PHONY: help install run run-dev run-uds run-https run-proxy run-dev-proxy cert cert-san health status topics docker-build docker-run docker-run-proxy plugin-install plugin-uninstall plugin-reload plugin-demo smoke proxy-smoke test test-functional test-integration test-http test-ws test-proxy-integration systemd-user-install systemd-user-enable systemd-user-enable-socket systemd-user-disable nvim-plugin-install nvim-plugin-pack
+.PHONY: help install run run-dev run-uds run-https run-proxy run-dev-proxy cert cert-san health status topics docker-build docker-run docker-run-proxy docker-build-tunel-test plugin-install plugin-uninstall plugin-reload plugin-demo smoke proxy-smoke test test-functional test-integration test-http test-ws test-proxy-integration test-tunel systemd-user-install systemd-user-enable systemd-user-enable-socket systemd-user-disable nvim-plugin-install nvim-plugin-pack
 
 help:
 	@echo "Targets:"
@@ -41,6 +42,7 @@ help:
 	@echo "  docker-build - build Docker image ($(IMAGE))"
 	@echo "  docker-run   - run Docker image mapping port $(PORT)"
 	@echo "  docker-run-proxy - run Docker image with proxy env"
+	@echo "  docker-build-tunel-test - build SSH test image for tunnel tests"
 	@echo "  plugin-install - install tmux plugin (symlink to ~/.tmux/plugins/tmux-rclipboard)"
 	@echo "  plugin-uninstall - remove installed tmux plugin"
 	@echo "  plugin-reload - reload tmux config to pick up plugin"
@@ -48,6 +50,7 @@ help:
 	@echo "  smoke         - quick HTTP smoke test (health/clip/fetch)"
 	@echo "  proxy-smoke   - start upstream+proxy servers and verify replication both ways"
 	@echo "  test          - run all automated tests"
+	@echo "  test-tunel    - SSH tunnel smoke tests (requires docker-build-tunel-test)"
 	@echo "  test-functional - run functional HTTP/WS tests"
 	@echo "  test-integration - run integration tests"
 	@echo "  systemd-user-install - install user units + env (override WorkingDirectory)"
@@ -215,7 +218,7 @@ test: test-functional test-integration
 
 test-functional: test-http test-ws
 
-test-integration: test-proxy-integration
+test-integration: test-proxy-integration test-tunel
 
 test-http:
 	PYTHONPATH=src .venv/bin/python -m unittest tests.test_functional_http -v
@@ -225,6 +228,13 @@ test-ws:
 
 test-proxy-integration:
 	PYTHONPATH=src .venv/bin/python -m unittest tests.test_integration_proxy -v
+
+docker-build-tunel-test:
+	docker build -t $(TUNEL_TEST_IMAGE) tests/docker/tunel/
+
+test-tunel:
+	PYTHONPATH=src RCLIPBOARD_TUNEL_TEST_IMAGE=$(TUNEL_TEST_IMAGE) \
+	.venv/bin/python -m unittest tests.test_integration_tunel -v
 
 systemd-user-install:
 	REPO_DIR="$(CURDIR)" ./scripts/install-systemd-user.sh

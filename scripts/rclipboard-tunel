@@ -135,11 +135,15 @@ if [ -z "$LOCAL_SPEC" ]; then
     fi
 fi
 
-# ── parse_endpoint: echo "TYPE HOST PORT PATH" ───────────────────────────────
+# ── parse_endpoint: printf "TYPE|HOST|PORT|PATH" ─────────────────────────────
 # TYPE  = tcp | uds
 # HOST  = IP/hostname (tcp only, else empty)
 # PORT  = port number (tcp only, else empty)
 # PATH  = socket path (uds only, else empty)
+#
+# Fields are pipe-separated ('|').  We cannot use tab/space because bash
+# treats them as IFS whitespace and collapses consecutive occurrences, losing
+# empty fields.  Pipe is safe: it never appears in Unix socket paths.
 parse_endpoint() {
     local spec="$1"
     local etype ehost eport epath
@@ -181,7 +185,7 @@ parse_endpoint() {
             exit 1
             ;;
     esac
-    echo "$etype $ehost $eport $epath"
+    printf '%s|%s|%s|%s' "$etype" "$ehost" "$eport" "$epath"
 }
 
 # ── build the SSH spec component for one endpoint ────────────────────────────
@@ -196,13 +200,13 @@ endpoint_to_ssh_spec() {
 }
 
 # ── resolve endpoints ─────────────────────────────────────────────────────────
-read -r L_TYPE L_HOST L_PORT L_PATH <<< "$(parse_endpoint "$LOCAL_SPEC")"
+IFS='|' read -r L_TYPE L_HOST L_PORT L_PATH <<< "$(parse_endpoint "$LOCAL_SPEC")"
 
 if [ -z "$REMOTE_SPEC" ]; then
     # Default remote: TCP on the upstream/proxy port
     REMOTE_SPEC="tcp:127.0.0.1:${RCLIPBOARD_UPSTREAM_PORT:-8988}"
 fi
-read -r R_TYPE R_HOST R_PORT R_PATH <<< "$(parse_endpoint "$REMOTE_SPEC")"
+IFS='|' read -r R_TYPE R_HOST R_PORT R_PATH <<< "$(parse_endpoint "$REMOTE_SPEC")"
 
 LOCAL_SSH_SPEC="$(endpoint_to_ssh_spec "$L_TYPE" "$L_HOST" "$L_PORT" "$L_PATH")"
 REMOTE_SSH_SPEC="$(endpoint_to_ssh_spec "$R_TYPE" "$R_HOST" "$R_PORT" "$R_PATH")"
