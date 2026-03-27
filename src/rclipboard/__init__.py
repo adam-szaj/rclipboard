@@ -3,6 +3,8 @@ import asyncio
 import contextlib
 import os
 import signal
+import sys
+from pathlib import Path
 
 import uvicorn
 
@@ -24,7 +26,39 @@ async def _run_fifo_server() -> None:
         await shutdown(app)
 
 
+def _run_config_cmd(argv: list[str]) -> None:
+    from rclipboard.config import print_env
+
+    parser = argparse.ArgumentParser(prog="rclipboard config")
+    subparsers = parser.add_subparsers(dest="cmd")
+
+    env_p = subparsers.add_parser("env", help="print env vars from config.toml")
+    env_p.add_argument(
+        "--config",
+        type=Path,
+        default=None,
+        metavar="FILE",
+        help="path to config.toml (default: ~/.config/rclipboard/config.toml)",
+    )
+
+    args = parser.parse_args(argv)
+    if args.cmd == "env":
+        print_env(args.config)
+    else:
+        parser.print_help()
+        sys.exit(1)
+
+
 def main() -> None:
+    # Intercept "config" subcommand before normal server startup.
+    if len(sys.argv) >= 2 and sys.argv[1] == "config":
+        _run_config_cmd(sys.argv[2:])
+        return
+
+    # Apply TOML config before reading env vars — env vars take precedence.
+    from rclipboard.config import apply_config
+    apply_config()
+
     parser = argparse.ArgumentParser(prog="rclipboard")
     parser.add_argument("--fd", type=int, default=None)
     args = parser.parse_args()

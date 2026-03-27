@@ -6,6 +6,7 @@ import json
 import os
 from logging import Logger
 from typing import Any, override
+from pathlib import Path
 
 from pydantic import JsonValue
 from fastapi import FastAPI
@@ -61,6 +62,7 @@ class ProxyClient(BidirectionalInterface):
         self.topics = set(topics or DEFAULT_TOPICS)
         self.connected = False
         self._watch_id: int | str | None = None
+        info(f"{self.__dict__}")
 
     @property
     @override
@@ -96,7 +98,7 @@ class ProxyClient(BidirectionalInterface):
             "method": "clip.put",
             "params": {
                 "items": [item.model_dump(mode="json")],
-                "meta": meta or {},
+                "meta": meta or dict(),
             },
         })
 
@@ -137,7 +139,8 @@ class ProxyClient(BidirectionalInterface):
     async def run_loop(self):
         ws_cm: Any
         if self.unix:
-            ws_cm = unix_connect(path=self.path, uri=self.url)
+            debug(f"unix_connect: path: {self.path} uri={self.url}")
+            ws_cm = unix_connect(path=str(self.path), uri=self.url)
         else:
             ws_cm = connect(self.url)
 
@@ -170,7 +173,7 @@ class ProxyClient(BidirectionalInterface):
             except a.CancelledError:
                 raise
             except Exception as exc:
-                debug(f"proxy upstream error: {exc}", exc_info=True)
+                warning(f"proxy upstream error: {exc}", exc_info=True)
             finally:
                 self.connected = False
                 self.ws = None
@@ -179,7 +182,7 @@ class ProxyClient(BidirectionalInterface):
             backoff = min(backoff * 2, 30.0)
 
 
-def _make_ws_url() -> dict[str, object]:
+def _make_ws_url() -> dict[str, str | bool | Path]:
     endpoint = upstream_endpoint_from_env()
     if endpoint.scheme == "uds":
         return {

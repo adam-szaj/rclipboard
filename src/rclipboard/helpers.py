@@ -80,16 +80,16 @@ def bind_endpoint_from_env() -> EndpointConfig:
 
 
 def upstream_endpoint_from_env() -> EndpointConfig:
+    host = os.environ.get("RCLIPBOARD_UPSTREAM_ADDR", "127.0.0.1")
+    port = int(os.environ.get("RCLIPBOARD_UPSTREAM_PORT", 8989))
+    uds = os.environ.get("RCLIPBOARD_UPSTREAM_UDS")
     endpoint = os.environ.get("RCLIPBOARD_UPSTREAM_ENDPOINT")
     if endpoint:
         return parse_endpoint(endpoint)
 
-    uds = os.environ.get("RCLIPBOARD_UPSTREAM_UDS")
     if uds:
-        return EndpointConfig(scheme="uds", path=uds)
+        return EndpointConfig(scheme="uds", path=uds, host=host, port=port)
 
-    host = os.environ.get("RCLIPBOARD_UPSTREAM_ADDR", "127.0.0.1")
-    port = int(os.environ.get("RCLIPBOARD_UPSTREAM_PORT", 8989))
     return EndpointConfig(scheme="http", host=host, port=port)
 
 

@@ -9,93 +9,90 @@ BIN_DIR="$APP_DIR/bin"
 VENV_DIR="$APP_DIR/venv"
 SHARE_SYSTEMD_DIR="$APP_DIR/systemd/user"
 UNIT_DIR="$HOME/.config/systemd/user"
-ENV_DIR="$APP_DIR"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 SYSTEMCTL_BIN="${SYSTEMCTL_BIN:-systemctl}"
 SKIP_PIP_INSTALL="${RCLIPBOARD_INSTALL_SKIP_PIP:-0}"
 
-RCLIPBOARD_BIND_ADDR=127.0.0.1
-RCLIPBOARD_BIND_PORT=8989
-RCLIPBOARD_UPSTREAM_ADDR=127.0.0.1
-RCLIPBOARD_UPSTREAM_PORT=8988
-
-# TODO default settings for tcp, uds, fifo for main-service and proxy
-# TODO add command line options, to choose which configuration should be generated like so:
-# ./scripts/install-systemd-user.sh --service=tcp[[;address=127.0.0.1];port=8989] [--proxy=none] --xsel=on
-# ./scripts/install-systemd-user.sh --service=tcp[[;address=127.0.0.1];port=8989] --proxy=uds;<path-to-upstream-socket>;http://127.0.0.1:8989/v1/ws [--xsel=off]
-# ./scripts/install-systemd-user.sh --service=uds;<path-to-main-socket>;http://127.0.0.1:8989/v1/ws --proxy=uds;<path-to-upstream-socket>;http://127.0.0.1:8989/v1/ws [--xsel=off]
-
-
-
-mkdir -p "$UNIT_DIR" "$ENV_DIR" "$BIN_DIR" "$SHARE_SYSTEMD_DIR"
+mkdir -p "$UNIT_DIR" "$APP_DIR" "$BIN_DIR" "$SHARE_SYSTEMD_DIR"
 
 copy_unit_template() {
-  local src="$1"
-  local dst="$2"
-  install -m 0644 "$src" "$dst"
+    local src="$1" dst="$2"
+    install -m 0644 "$src" "$dst"
 }
 
 copy_executable() {
-  local src="$1"
-  local dst="$2"
-  install -m 0755 "$src" "$dst"
+    local src="$1" dst="$2"
+    install -m 0755 "$src" "$dst"
 }
 
+# ── scripts ──────────────────────────────────────────────────────────────────
 for f in "$REPO_DIR"/scripts/*; do
-  if [ -f "$f" ]; then
-    copy_executable "$f" "$BIN_DIR/$(basename "$f")"
-  fi
+    if [ -f "$f" ]; then
+        copy_executable "$f" "$BIN_DIR/$(basename "$f")"
+    fi
 done
 
+# ── systemd units ────────────────────────────────────────────────────────────
 for f in \
-  "$REPO_DIR"/scripts/systemd/user/rclipboard.service \
-  "$REPO_DIR"/scripts/systemd/user/rclipboard-proxy.service \
-  "$REPO_DIR"/scripts/systemd/user/rclipboard.socket \
-  "$REPO_DIR"/scripts/systemd/user/rclipboard@.service
+    "$REPO_DIR"/scripts/systemd/user/rclipboard.service \
+    "$REPO_DIR"/scripts/systemd/user/rclipboard-proxy.service \
+    "$REPO_DIR"/scripts/systemd/user/rclipboard.socket \
+    "$REPO_DIR"/scripts/systemd/user/rclipboard@.service
 do
-  if [ -f "$f" ]; then
-    copy_unit_template "$f" "$SHARE_SYSTEMD_DIR/$(basename "$f")"
-    copy_unit_template "$f" "$UNIT_DIR/$(basename "$f")"
-  fi
+    if [ -f "$f" ]; then
+        copy_unit_template "$f" "$SHARE_SYSTEMD_DIR/$(basename "$f")"
+        copy_unit_template "$f" "$UNIT_DIR/$(basename "$f")"
+    fi
 done
 
-if [ ! -f "$ENV_DIR/env" ]; then
-    echo -e "set -u ; cat << EOF\n $(cat ./scripts/systemd/user/rclipboard.env.example)\nEOF" |
-        env RCLIPBOARD_BIND_ADDR=127.0.0.1 \
-            RCLIPBOARD_BIND_PORT=8989 \
-            RCLIPBOARD_UPSTREAM_ADDR=127.0.0.1 \
-            RCLIPBOARD_UPSTREAM_PORT=8988 \
-            bash -
-    echo "Created $ENV_DIR/env (edit as needed)."
-fi
-
+# ── Python venv + package ────────────────────────────────────────────────────
 if [ ! -x "$VENV_DIR/bin/python" ]; then
-  "$PYTHON_BIN" -m venv "$VENV_DIR"
+    "$PYTHON_BIN" -m venv "$VENV_DIR"
 fi
 
 if [ "$SKIP_PIP_INSTALL" != "1" ]; then
-  "$VENV_DIR/bin/pip" install --upgrade pip
-  "$VENV_DIR/bin/pip" install "$REPO_DIR"
+    "$VENV_DIR/bin/pip" install --upgrade pip --quiet
+    "$VENV_DIR/bin/pip" install "$REPO_DIR" --quiet
 fi
 
-mkdir -p "$UNIT_DIR/rclipboard.service.d" "$UNIT_DIR/rclipboard@.service.d" "$UNIT_DIR/rclipboard-proxy.service.d"
-cat >"$UNIT_DIR/rclipboard.service.d/override.conf" <<EOF
+# ── config.toml (generated once) ─────────────────────────────────────────────
+CONF_EXAMPLE="$REPO_DIR/scripts/systemd/user/rclipboard.conf.example"
+if [ ! -f "$APP_DIR/config.toml" ] && [ -f "$CONF_EXAMPLE" ]; then
+    install -m 0644 "$CONF_EXAMPLE" "$APP_DIR/config.toml"
+    echo "Created $APP_DIR/config.toml (edit as needed)."
+fi
+
+# ── env file (generated once from config.toml) ───────────────────────────────
+if [ ! -f "$APP_DIR/env" ]; then
+    "$VENV_DIR/bin/rclipboard" config env --config "$APP_DIR/config.toml" \
+        > "$APP_DIR/env"
+    echo "Created $APP_DIR/env"
+    echo "To regenerate after editing config.toml:"
+    echo "  rclipboard config env > $APP_DIR/env"
+fi
+
+# ── systemd WorkingDirectory overrides ───────────────────────────────────────
+mkdir -p \
+    "$UNIT_DIR/rclipboard.service.d" \
+    "$UNIT_DIR/rclipboard@.service.d" \
+    "$UNIT_DIR/rclipboard-proxy.service.d"
+
+for svc in rclipboard.service rclipboard@.service rclipboard-proxy.service; do
+    cat > "$UNIT_DIR/${svc}.d/override.conf" << EOF
 [Service]
 WorkingDirectory=$APP_DIR
 EOF
-cat >"$UNIT_DIR/rclipboard@.service.d/override.conf" <<EOF
-[Service]
-WorkingDirectory=$APP_DIR
-EOF
-cat >"$UNIT_DIR/rclipboard-proxy.service.d/override.conf" <<EOF
-[Service]
-WorkingDirectory=$APP_DIR
-EOF
+done
 
 "$SYSTEMCTL_BIN" --user daemon-reload
-echo "Installed user units, venv and scripts."
-echo "Venv: $VENV_DIR"
-echo "Bin:  $BIN_DIR"
+
+echo
+echo "Installed user units, venv, scripts, and config."
+echo "  Venv:   $VENV_DIR"
+echo "  Bin:    $BIN_DIR"
+echo "  Config: $APP_DIR/config.toml"
+echo "  Env:    $APP_DIR/env"
+echo
 echo "Add to PATH if needed:"
 echo "  export PATH=\"$BIN_DIR:\$PATH\""
 echo

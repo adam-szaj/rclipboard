@@ -3,7 +3,7 @@ import re
 from abc import ABC, abstractmethod
 from typing import Annotated, Literal, override
 
-from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator
+from pydantic import BaseModel, ConfigDict, Field, Json, JsonValue, field_validator
 
 _TOPIC_RE = re.compile(r'^[a-zA-Z0-9_-]{1,64}$')
 
@@ -45,7 +45,7 @@ class ValueData(BaseModel):
 class TopicData(BaseModel):
     topic: Annotated[str, Field(init=True)]
     value: Annotated[ValueData, Field(init=True)]
-    meta: Annotated[dict[str, str], Field(init=True)]
+    meta: Annotated[dict[str, JsonValue], Field(init=True)]
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 

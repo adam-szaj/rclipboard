@@ -1,0 +1,118 @@
+"""TOML configuration loader for rclipboard.
+
+Priority (highest wins):
+  CLI flags  >  environment variables  >  config.toml  >  built-in defaults
+
+Usage in server:
+    from rclipboard.config import apply_config
+    apply_config()          # call before any os.environ.get() reads
+
+Usage for shell scripts:
+    rclipboard config env   # prints KEY=VALUE lines, shell/systemd-sourceable
+"""
+from __future__ import annotations
+
+import os
+import sys
+from pathlib import Path
+
+if sys.version_info >= (3, 11):
+    import tomllib
+else:
+    try:
+        import tomllib  # type: ignore[import]
+    except ImportError:
+        tomllib = None  # type: ignore[assignment]
+
+DEFAULT_CONFIG_PATH = Path.home() / ".config" / "rclipboard" / "config.toml"
+
+
+def _bool_str(v: object) -> str:
+    if isinstance(v, bool):
+        return "1" if v else "0"
+    return str(v)
+
+
+# (toml_section, toml_key, env_var_name, value_converter)
+_FIELDS: list[tuple[str, str, str, object]] = [
+    ("server", "endpoint",          "RCLIPBOARD_ENDPOINT",              str),
+    ("server", "log_level",         "RCLIPBOARD_LOG_LEVEL",             str),
+    ("server", "py_log_level",      "RCLIPBOARD_PY_LOG_LEVEL",          str),
+    ("server", "notify_delay_ms",   "RCLIPBOARD_NOTIFY_DELAY_MS",       str),
+    ("server", "xsel",              "RCLIPBOARD_XSEL",                  _bool_str),
+    ("server", "xsel_path",         "RCLIPBOARD_XSEL_PATH",             str),
+    ("server", "xsel_interval_ms",  "RCLIPBOARD_XSEL_INTERVAL_MS",      str),
+    ("server", "fifo_dir",          "RCLIPBOARD_FIFO_DIR",              str),
+    ("server", "reload",            "RCLIPBOARD_RELOAD",                _bool_str),
+    ("proxy",  "enabled",           "RCLIPBOARD_PROXY",                 _bool_str),
+    ("proxy",  "upstream_endpoint", "RCLIPBOARD_UPSTREAM_ENDPOINT",     str),
+    ("ssl",    "certfile",          "RCLIPBOARD_SSL_CERTFILE",          str),
+    ("ssl",    "keyfile",           "RCLIPBOARD_SSL_KEYFILE",           str),
+    ("ssl",    "keyfile_password",  "RCLIPBOARD_SSL_KEYFILE_PASSWORD",  str),
+    ("client", "transport",         "RCLIPCTL_TRANSPORT",               str),
+    ("client", "endpoint",          "RCLIPCTL_ENDPOINT",                str),
+]
+
+
+def _config_path() -> Path:
+    return Path(os.environ.get("RCLIPBOARD_CONFIG", str(DEFAULT_CONFIG_PATH)))
+
+
+def load_config(path: Path | None = None) -> dict[str, str]:
+    """Read config.toml and return a mapping of env-var-name → value string.
+
+    String values containing ``${VAR}`` or ``$VAR`` are expanded via
+    :func:`os.path.expandvars` so templates like ``${XDG_RUNTIME_DIR}`` work.
+    Empty string values are skipped (treated as "not set").
+    """
+    if tomllib is None:
+        return {}
+    resolved = path or _config_path()
+    if not resolved.exists():
+        return {}
+    with resolved.open("rb") as f:
+        data = tomllib.load(f)
+
+    result: dict[str, str] = {}
+    for section, key, env_var, converter in _FIELDS:
+        section_data = data.get(section)
+        if not isinstance(section_data, dict):
+            continue
+        if key not in section_data:
+            continue
+        raw = section_data[key]
+        if raw is None or raw == "":
+            continue
+        converted: str = converter(raw)  # type: ignore[operator]
+        if isinstance(converted, str):
+            converted = os.path.expandvars(converted)
+        result[env_var] = converted
+    return result
+
+
+def apply_config(path: Path | None = None) -> None:
+    """Apply config.toml values to ``os.environ``.
+
+    Only sets variables that are not already present in the environment,
+    so explicit env-var overrides always win.
+    """
+    for env_var, value in load_config(path).items():
+        if env_var not in os.environ:
+            os.environ[env_var] = value
+
+
+def print_env(path: Path | None = None) -> None:
+    """Print config as ``KEY="value"`` lines.
+
+    Output is suitable for:
+    - shell sourcing: ``eval "$(rclipboard config env)"``
+    - systemd ``EnvironmentFile=`` (double-quoted values are stripped)
+    - writing to ``~/.config/rclipboard/env``
+
+    All values are already expanded (no shell variable references remain).
+    """
+    for env_var, value in sorted(load_config(path).items()):
+        # Escape backslashes and double-quotes; neutralise $ so the file
+        # is safe to source in bash without unexpected expansion.
+        safe = value.replace("\\", "\\\\").replace('"', '\\"').replace("$", "\\$")
+        print(f'{env_var}="{safe}"')

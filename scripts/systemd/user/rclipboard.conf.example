@@ -1,0 +1,51 @@
+# rclipboard configuration
+# Location: ~/.config/rclipboard/config.toml
+#
+# Environment variables (${VAR}) are expanded at runtime by the server and by
+# `rclipboard config env`.  Edit this file and run:
+#
+#   rclipboard config env > ~/.config/rclipboard/env
+#
+# to regenerate the env file used by systemd and the shell scripts.
+
+[server]
+# Bind endpoint.  Supported formats:
+#   "uds://${XDG_RUNTIME_DIR}/rclipboard/uds.sock"  — Unix Domain Socket
+#   "127.0.0.1:8989"                                 — TCP
+#   "https://127.0.0.1:8989"                         — HTTPS (needs [ssl])
+#   "fifo:///path/to/dir"                            — FIFO-only mode
+endpoint = "uds://${XDG_RUNTIME_DIR}/rclipboard/uds.sock"
+
+# Parallel FIFO directory (active alongside HTTP/WS server when set)
+fifo_dir = "${XDG_RUNTIME_DIR}/rclipboard"
+
+# Logging
+log_level    = "info"   # uvicorn level: debug | info | warning | error
+py_log_level = "INFO"   # Python logging level
+notify_delay_ms = 250   # clipboard notification debounce (ms)
+
+# X11 clipboard polling via xsel
+xsel              = true
+xsel_path         = "/usr/bin/xsel"
+xsel_interval_ms  = 250
+
+[proxy]
+# Enable proxy mode: connect to an upstream server and replicate topics locally.
+enabled = false
+
+# Upstream server endpoint — same formats as server.endpoint above.
+# upstream_endpoint = "127.0.0.1:8988"
+# upstream_endpoint = "uds:///run/user/1000/rclipboard/uds.sock"
+
+[ssl]
+certfile = ""
+keyfile  = ""
+# keyfile_password = ""
+
+[client]
+# Transport preference for rclipctl: auto | fifo | uds | tcp
+transport = "auto"
+
+# Override which endpoint rclipctl connects to.
+# Defaults to server.endpoint when empty.
+# endpoint = ""

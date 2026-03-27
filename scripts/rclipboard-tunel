@@ -1,113 +1,238 @@
-#!/bin/bash
+#!/usr/bin/env bash
+# rclipboard-tunel — establish an SSH tunnel for rclipboard
+#
+# Supports all four socket-type combinations via OpenSSH's -L / -R:
+#
+#   --reverse (default)  remote side reaches local endpoint   (ssh -R)
+#   --forward            local side reaches remote endpoint   (ssh -L)
+#
+# Endpoint format:  tcp:HOST:PORT   or   uds:///path/to.sock
+set -euo pipefail
 
+RCLIP_CONF="${RCLIP_CONF:-$HOME/.config/rclipboard/env}"
 
-TEMP=$(getopt -o "ldgptTxXf:r:P:h" -l "login,daemonize,get,push,remote-addr:,remote-port:,help" -- "$@")
-usage()
-{
+usage() {
     cat << EOF
+Usage:
+  rclipboard-tunel --ssh <user@host> [OPTIONS] [-- <extra ssh args>]
 
-rclipboard-tunel -d|--deamonize -l|--login -t -T -x -X -r|--remote-addr <remote-addr> -P|--remote-port <remote-port> -h|--help
-    -d|--daemonize      deamonize process
-    -t                  <local-server>  =>  <remote-proxy>
-    -T                  <local-proxy>   =>  <remote-server>
-    -x                  <local-server>  =>  <remote-server>
-    -X                  <local-proxy>   =>  <remote-proxy>
-    -r|--remote-addr <ipaddr>
-    -P|--remote-port <port>
+Endpoint options (format: tcp:HOST:PORT  or  uds:///path/to.sock):
+  --local  <endpoint>   local server endpoint       (default: from env/config)
+  --remote <endpoint>   endpoint visible on remote   (default: derived from local)
 
+SSH options:
+  --ssh       <user@host>  SSH destination (required)
+  --ssh-port  <port>       SSH port        (default: 22)
+
+Tunnel direction:
+  --reverse   remote side reaches local endpoint via ssh -R  (default)
+  --forward   local side reaches remote endpoint via ssh -L
+
+Other:
+  --login       open an interactive shell instead of -N (port-forward only)
+  --daemonize   run in background
+  --config <file>   path to config.toml (uses 'rclipboard config env')
+  -h, --help
+
+Examples:
+  # Share local UDS server with remote machine (remote proxy on TCP 8988):
+  rclipboard-tunel --local uds:///run/user/1000/rclipboard/uds.sock \\
+                   --remote tcp:127.0.0.1:8988 \\
+                   --ssh user@remotehost
+
+  # Expose remote TCP server locally via UDS:
+  rclipboard-tunel --local uds:///run/user/1000/rclipboard/proxy.sock \\
+                   --remote tcp:127.0.0.1:8989 \\
+                   --ssh user@remotehost --forward
 EOF
     exit 0
 }
 
-if [ $? != 0 ] ; then echo "Terminating..." >&2 ; exit 1 ; fi
-eval set -- "$TEMP"
+# ── locate rclipboard binary ─────────────────────────────────────────────────
+find_rclipboard() {
+    if command -v rclipboard >/dev/null 2>&1; then
+        echo "rclipboard"; return
+    fi
+    local venv_bin="$HOME/.config/rclipboard/venv/bin/rclipboard"
+    if [ -x "$venv_bin" ]; then
+        echo "$venv_bin"; return
+    fi
+    return 1
+}
 
-test -e ~/.config/rclipboard/env && source ~/.config/rclipboard/env
+# ── pre-scan for --config before loading env ─────────────────────────────────
+CONFIG_FILE=""
+_prev=""
+for _arg in "$@"; do
+    case "$_arg" in
+        --config=*) CONFIG_FILE="${_arg#--config=}" ;;
+        *)          [ "$_prev" = "--config" ] && CONFIG_FILE="$_arg" ;;
+    esac
+    _prev="$_arg"
+done
+unset _prev _arg
 
-demonize=0
-get=0
-post=0
-remote_addr=
-remote_port=22
-tunel=0
+# ── load configuration ───────────────────────────────────────────────────────
+if [ -n "$CONFIG_FILE" ]; then
+    RCLIPBOARD_BIN="$(find_rclipboard)" || {
+        echo "error: rclipboard not found in PATH; cannot load --config" >&2
+        exit 1
+    }
+    # shellcheck disable=SC2046
+    eval "$("$RCLIPBOARD_BIN" config env --config "$CONFIG_FILE")"
+elif [ -r "$RCLIP_CONF" ]; then
+    # shellcheck disable=SC1090
+    . "$RCLIP_CONF"
+fi
 
-service_port=${RCLIPBOARD_BIND_PORT:-8989}
-proxy_port=${RCLIPBOARD_UPSTREAM_PORT:-8988}
-RSSH_OPTIONS=()
-OTEMP=()
-ssh_opts=()
-login=0
-while true; do
+# ── option defaults ───────────────────────────────────────────────────────────
+DAEMONIZE=0
+LOGIN=0
+SSH_DEST=""
+SSH_PORT=22
+DIRECTION="reverse"
+LOCAL_SPEC=""
+REMOTE_SPEC=""
+SSH_EXTRA_ARGS=()
+
+# ── parse arguments ───────────────────────────────────────────────────────────
+while [ $# -gt 0 ]; do
     case "$1" in
-        -l|--login)
-            login=1
-            OTEMP+=("${1}")
-            shift
-            ;;
-        -r|--remote-addr)
-            remote_addr="${2}"
-            OTEMP+=("${1}" "${2}")
-            shift 2
-            ;;
-        -P|--remote-port)
-            remote_port="${2}"
-            OTEMP+=("${1}" "${2}")
-            shift 2
-            ;;
-        -d|--daemonize)
-            demonize=1
-            shift
-            ;;
-        -t|-T|-x|-X)
-            case "$1" in
-                -t)
-                    tunel=01
-                    tunel_rport=${proxy_port}
-                    tunel_lport=${service_port}
-                    ;;
-                -T)
-                    tunel=10
-                    tunel_rport=${service_port}
-                    tunel_lport=${proxy_port}
-                    ;;
-                -x)
-                    tunel=00
-                    tunel_rport=${service_port}
-                    tunel_lport=${service_port}
-                    ;;
-                -X)
-                    tunel=11
-                    tunel_rport=${proxy_port}
-                    tunel_lport=${proxy_port}
-                    ;;
-            esac
-            shift
-            ;;
-        -h|--help)
-            usage
-            exit 0
-            ;;
-        "--")
-            OTEMP+=(${@})
-            opts=(${@})
-            RSSH_OPTIONS+=(${opts[@]:1})
-            break ;;
-        *)
-            RSSH_OPTIONS+=("$1")
-            shift
-            ;;
+        --local)        LOCAL_SPEC="$2";  shift 2 ;;
+        --local=*)      LOCAL_SPEC="${1#--local=}"; shift ;;
+        --remote)       REMOTE_SPEC="$2"; shift 2 ;;
+        --remote=*)     REMOTE_SPEC="${1#--remote=}"; shift ;;
+        --ssh)          SSH_DEST="$2";    shift 2 ;;
+        --ssh=*)        SSH_DEST="${1#--ssh=}"; shift ;;
+        --ssh-port)     SSH_PORT="$2";    shift 2 ;;
+        --ssh-port=*)   SSH_PORT="${1#--ssh-port=}"; shift ;;
+        --config)       shift 2 ;;   # already consumed above
+        --config=*)     shift ;;
+        --reverse)      DIRECTION="reverse"; shift ;;
+        --forward)      DIRECTION="forward"; shift ;;
+        --login|-l)     LOGIN=1;      shift ;;
+        --daemonize|-d) DAEMONIZE=1;  shift ;;
+        -h|--help)      usage ;;
+        --)             shift; SSH_EXTRA_ARGS=("$@"); break ;;
+        *)              echo "unknown option: $1" >&2; exit 1 ;;
     esac
 done
 
-if [[ "${login}" = "0" ]] ; then
-    ssh_opts+=(-N)
+if [ -z "$SSH_DEST" ]; then
+    echo "error: --ssh <user@host> is required" >&2
+    echo
+    usage
 fi
 
-if [[ "${demonize}" = "1" ]] ; then
-    echo "demonize: ${OTEMP[@]}"
-    $0 ${OTEMP[@]} &>/dev/null &
+# ── resolve default LOCAL_SPEC from env ──────────────────────────────────────
+if [ -z "$LOCAL_SPEC" ]; then
+    if [ -n "${RCLIPBOARD_ENDPOINT:-}" ]; then
+        LOCAL_SPEC="$RCLIPBOARD_ENDPOINT"
+    elif [ -n "${RCLIPBOARD_BIND_UDS:-}" ]; then
+        LOCAL_SPEC="uds://${RCLIPBOARD_BIND_UDS}"
+    else
+        LOCAL_SPEC="tcp:${RCLIPBOARD_BIND_ADDR:-127.0.0.1}:${RCLIPBOARD_BIND_PORT:-8989}"
+    fi
+fi
+
+# ── parse_endpoint: echo "TYPE HOST PORT PATH" ───────────────────────────────
+# TYPE  = tcp | uds
+# HOST  = IP/hostname (tcp only, else empty)
+# PORT  = port number (tcp only, else empty)
+# PATH  = socket path (uds only, else empty)
+parse_endpoint() {
+    local spec="$1"
+    local etype ehost eport epath
+    ehost=""; eport=""; epath=""
+
+    case "$spec" in
+        tcp:*)
+            etype="tcp"
+            local rest="${spec#tcp:}"
+            rest="${rest#//}"           # strip optional //
+            ehost="${rest%:*}"
+            eport="${rest##*:}"
+            ;;
+        uds://*)
+            etype="uds"
+            epath="${spec#uds://}"
+            ;;
+        uds:*)
+            etype="uds"
+            epath="${spec#uds:}"
+            ;;
+        /*)
+            etype="uds"
+            epath="$spec"
+            ;;
+        http://*|https://*)
+            etype="tcp"
+            local rest="${spec#*://}"
+            ehost="${rest%:*}"
+            eport="${rest##*:}"
+            ;;
+        *:*)
+            etype="tcp"
+            ehost="${spec%:*}"
+            eport="${spec##*:}"
+            ;;
+        *)
+            echo "unsupported endpoint format: $spec" >&2
+            exit 1
+            ;;
+    esac
+    echo "$etype $ehost $eport $epath"
+}
+
+# ── build the SSH spec component for one endpoint ────────────────────────────
+# For TCP:  "HOST:PORT"    For UDS: "/path/to.sock"
+endpoint_to_ssh_spec() {
+    local etype="$1" ehost="$2" eport="$3" epath="$4"
+    if [ "$etype" = "tcp" ]; then
+        echo "${ehost}:${eport}"
+    else
+        echo "$epath"
+    fi
+}
+
+# ── resolve endpoints ─────────────────────────────────────────────────────────
+read -r L_TYPE L_HOST L_PORT L_PATH <<< "$(parse_endpoint "$LOCAL_SPEC")"
+
+if [ -z "$REMOTE_SPEC" ]; then
+    # Default remote: TCP on the upstream/proxy port
+    REMOTE_SPEC="tcp:127.0.0.1:${RCLIPBOARD_UPSTREAM_PORT:-8988}"
+fi
+read -r R_TYPE R_HOST R_PORT R_PATH <<< "$(parse_endpoint "$REMOTE_SPEC")"
+
+LOCAL_SSH_SPEC="$(endpoint_to_ssh_spec "$L_TYPE" "$L_HOST" "$L_PORT" "$L_PATH")"
+REMOTE_SSH_SPEC="$(endpoint_to_ssh_spec "$R_TYPE" "$R_HOST" "$R_PORT" "$R_PATH")"
+
+# ── build tunnel flag ─────────────────────────────────────────────────────────
+# -R remote:local  → remote machine reaches local endpoint
+# -L local:remote  → local machine reaches remote endpoint
+if [ "$DIRECTION" = "reverse" ]; then
+    TUNNEL_FLAG="-R"
+    TUNNEL_SPEC="${REMOTE_SSH_SPEC}:${LOCAL_SSH_SPEC}"
 else
-    command=(ssh ${ssh_opts[*]} -R "${tunel_rport}:127.0.0.1:${tunel_lport}" -P "${remote_port}" ${RSSH_OPTIONS[@]} ${remote_addr})
-    echo "command: ${command[@]}"
-    exec ${command[@]}
+    TUNNEL_FLAG="-L"
+    TUNNEL_SPEC="${LOCAL_SSH_SPEC}:${REMOTE_SSH_SPEC}"
+fi
+
+# ── assemble SSH command ──────────────────────────────────────────────────────
+SSH_OPTS=(-p "$SSH_PORT" "$TUNNEL_FLAG" "$TUNNEL_SPEC")
+[ "$LOGIN" = "0" ] && SSH_OPTS+=(-N)
+SSH_CMD=(ssh "${SSH_OPTS[@]}" "${SSH_EXTRA_ARGS[@]}" "$SSH_DEST")
+
+echo "direction : $DIRECTION  ($TUNNEL_FLAG)"
+echo "local     : $LOCAL_SPEC"
+echo "remote    : $REMOTE_SPEC"
+echo "tunnel    : $TUNNEL_FLAG $TUNNEL_SPEC"
+echo "command   : ${SSH_CMD[*]}"
+
+# ── execute ───────────────────────────────────────────────────────────────────
+if [ "$DAEMONIZE" = "1" ]; then
+    exec "${SSH_CMD[@]}" </dev/null >/dev/null 2>&1 &
+    echo "tunnel started in background (pid $!)"
+else
+    exec "${SSH_CMD[@]}"
 fi
