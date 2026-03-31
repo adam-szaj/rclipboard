@@ -4,7 +4,8 @@ After=default.target
 
 [Service]
 Type=simple
-EnvironmentFile=%h/.config/rclipboard/env
+ExecStartPre=/bin/sh -c 'mkdir -p %t/rclipboard && %h/.config/rclipboard/venv/bin/rclipboard config env --config %h/.config/rclipboard/config.toml > %t/rclipboard/env'
+EnvironmentFile=%t/rclipboard/env
 WorkingDirectory=%h/.config/rclipboard
 Environment=RCLIPBOARD_PROXY=1
 ExecStart=%h/.config/rclipboard/venv/bin/rclipboard

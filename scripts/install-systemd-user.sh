@@ -62,15 +62,6 @@ if [ ! -f "$APP_DIR/config.toml" ] && [ -f "$CONF_EXAMPLE" ]; then
     echo "Created $APP_DIR/config.toml (edit as needed)."
 fi
 
-# ── env file (generated once from config.toml) ───────────────────────────────
-if [ ! -f "$APP_DIR/env" ]; then
-    "$VENV_DIR/bin/rclipboard" config env --config "$APP_DIR/config.toml" \
-        > "$APP_DIR/env"
-    echo "Created $APP_DIR/env"
-    echo "To regenerate after editing config.toml:"
-    echo "  rclipboard config env > $APP_DIR/env"
-fi
-
 # ── systemd WorkingDirectory overrides ───────────────────────────────────────
 mkdir -p \
     "$UNIT_DIR/rclipboard.service.d" \
@@ -91,7 +82,7 @@ echo "Installed user units, venv, scripts, and config."
 echo "  Venv:   $VENV_DIR"
 echo "  Bin:    $BIN_DIR"
 echo "  Config: $APP_DIR/config.toml"
-echo "  Env:    $APP_DIR/env"
+echo "  Env:    generated at runtime in \$XDG_RUNTIME_DIR/rclipboard/env (via ExecStartPre)"
 echo
 echo "Add to PATH if needed:"
 echo "  export PATH=\"$BIN_DIR:\$PATH\""

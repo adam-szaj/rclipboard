@@ -65,7 +65,8 @@ help:
 	uv venv --seed -c && \
 	source .venv/bin/activate && \
 	pip install -U pip uv uvicorn && \
-    uv pip install -r pyproject.toml
+    uv pip install -r pyproject.toml && \
+    uv pip install -e .
 
 install: .venv
 

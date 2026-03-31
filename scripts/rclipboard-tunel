@@ -9,7 +9,15 @@
 # Endpoint format:  tcp:HOST:PORT   or   uds:///path/to.sock
 set -euo pipefail
 
-RCLIP_CONF="${RCLIP_CONF:-$HOME/.config/rclipboard/env}"
+_RUNTIME_ENV="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/rclipboard/env"
+if [ -z "${RCLIP_CONF:-}" ]; then
+    if [ -r "$_RUNTIME_ENV" ]; then
+        RCLIP_CONF="$_RUNTIME_ENV"
+    else
+        RCLIP_CONF="$HOME/.config/rclipboard/env"
+    fi
+fi
+unset _RUNTIME_ENV
 
 usage() {
     cat << EOF
@@ -83,6 +91,12 @@ if [ -n "$CONFIG_FILE" ]; then
 elif [ -r "$RCLIP_CONF" ]; then
     # shellcheck disable=SC1090
     . "$RCLIP_CONF"
+elif [ -f "$HOME/.config/rclipboard/config.toml" ]; then
+    if RCLIPBOARD_BIN="$(find_rclipboard 2>/dev/null)"; then
+        echo "note: env file not found; generating from config.toml" >&2
+        # shellcheck disable=SC2046
+        eval "$("$RCLIPBOARD_BIN" config env --config "$HOME/.config/rclipboard/config.toml")"
+    fi
 fi
 
 # ── option defaults ───────────────────────────────────────────────────────────
