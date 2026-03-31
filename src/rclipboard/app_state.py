@@ -1,8 +1,9 @@
 import asyncio
+import contextlib
 import os
 from abc import ABC, abstractmethod
 from logging import Logger
-from typing import Any, Callable, Generic, TypeVar, override
+from typing import Any, Generic, TypeVar, override
 
 from fastapi import FastAPI
 
@@ -120,8 +121,10 @@ class AppState:
         self.pending_notifications: dict[str, InternalTopicData] = {}
         self.notification_tasks: dict[str, asyncio.Task[None]] = {}
         self.notification_lock = asyncio.Lock()
-        self.dispatcher_task: asyncio.Task[Callable[[], None]] = (asyncio.create_task(
-            self.dispatcher(), name="dispatcher"))
+        self._background_tasks: set[asyncio.Task] = set()
+        self.dispatcher_task: asyncio.Task[None] = asyncio.create_task(
+            self.dispatcher(), name="dispatcher"
+        )
 
     def subscribe_client(self, client: Interface, topics: list[str]) -> dict[str, TopicData]:
         contents: dict[str, TopicData] = dict()
@@ -156,10 +159,12 @@ class AppState:
     def _emit_runtime_state_change(self, reason: str) -> None:
         hooks = list(getattr(self.app.state, "runtime_state_hooks", []))
         for hook in hooks:
-            asyncio.create_task(
+            task = asyncio.create_task(
                 hook(self.app, reason),
                 name=f"runtime_state_{reason}",
             )
+            self._background_tasks.add(task)
+            task.add_done_callback(self._background_tasks.discard)
 
     async def dispatcher(self):
         while True:
@@ -226,19 +231,28 @@ class AppState:
             return
         await self._notify_topic_data(topic_data)
 
+    async def cancel_background_tasks(self) -> None:
+        tasks = list(self._background_tasks)
+        for task in tasks:
+            task.cancel()
+        for task in tasks:
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+
     async def flush_all_notifications(self) -> None:
         async with self.notification_lock:
-            topics = list(self.pending_notifications.keys())
+            pending = dict(self.pending_notifications)
             tasks = list(self.notification_tasks.values())
-        for topic in topics:
-            await self.flush_topic_notification(topic)
+            self.pending_notifications.clear()
+            self.notification_tasks.clear()
         for task in tasks:
             if not task.done():
                 task.cancel()
-                try:
-                    await task
-                except asyncio.CancelledError:
-                    pass
+        for task in tasks:
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+        for topic_data in pending.values():
+            await self._notify_topic_data(topic_data)
 
     async def process_put_item(self, topic_data: InternalTopicData):
         # Update content store and fan-out

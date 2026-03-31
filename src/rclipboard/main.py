@@ -48,8 +48,10 @@ async def shutdown(app: FastAPI):
         await xsel_mod.shutdown_xsel(app)
     await fifo_mod.shutdown_fifo(app)
 
-    task = getattr(app.state.main, "dispatcher_task", None)
-    await app.state.main.flush_all_notifications()
+    main: AppState = app.state.main
+    await main.cancel_background_tasks()
+    await main.flush_all_notifications()
+    task = main.dispatcher_task
     if task:
         task.cancel()
         try:

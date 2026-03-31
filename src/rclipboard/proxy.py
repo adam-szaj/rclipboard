@@ -222,6 +222,7 @@ async def shutdown_proxy(app: FastAPI) -> None:
         await task
     app.state.proxy_task = None
     app.state.proxy_connected = False
+    app.state.proxy_enabled = False
 
 
 async def on_local_topic_data(app: FastAPI, topic_data: TopicData, source: Any) -> None:

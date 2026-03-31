@@ -273,6 +273,13 @@ class XselInterface(BidirectionalInterface):
     async def shutdown(self) -> None:
         if not self.task:
             return
+        while not self.queue.empty():
+            try:
+                item: TopicData = self.queue.get_nowait()
+                self.queue.task_done()
+                await self.write_item(item.topic, item)
+            except Exception:
+                break
         self.task.cancel()
         try:
             await self.task

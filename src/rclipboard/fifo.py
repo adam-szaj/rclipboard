@@ -307,6 +307,8 @@ async def shutdown_fifo(app: FastAPI) -> None:
         app.state, "fifo_start_task", None
     )
     if start_task:
+        if not start_task.done():
+            start_task.cancel()
         with contextlib.suppress(a.CancelledError):
             await start_task
         app.state.fifo_start_task = None
