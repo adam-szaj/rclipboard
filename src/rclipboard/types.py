@@ -104,7 +104,8 @@ class ClipWatchParams(BaseModel):
 
 
 class ClipWatchResult(BaseModel):
-    contents: dict[str, TopicData]
+    topics: list[str] = Field(default_factory=list)
+    contents: dict[str, TopicData] = Field(default_factory=dict)
 
 
 class TopicsListParams(BaseModel):

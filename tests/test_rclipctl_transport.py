@@ -12,7 +12,7 @@ from tests.helpers import ROOT_DIR, free_port, running_server
 class RclipctlTransportTests(unittest.TestCase):
     def _run_rclipctl(self, env_file: Path, *args: str) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
-            [str(ROOT_DIR / "scripts" / "rclipctl"), *args],
+            [str(ROOT_DIR / "scripts" / "bin" / "rclipctl"), *args],
             cwd=ROOT_DIR,
             env={"PATH": "/usr/bin:/bin", "HOME": str(env_file.parent.parent.parent), "RCLIP_CONF": str(env_file)},
             text=True,

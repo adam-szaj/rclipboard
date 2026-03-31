@@ -40,31 +40,16 @@ _topic_data_to_clipboard_item = topic_data_to_clipboard_item
 _clipboard_item_to_topic_data = clipboard_item_to_topic_data
 
 
-def _empty_clipboard_item(topic: str) -> ClipboardItem:
-    return ClipboardItem(
-        topic=topic,
-        value="",
-        mime="text/plain",
-        encoding="utf-8",
+async def _http_exception_handler(_request: Request, exc: StarletteHTTPException):
+    if isinstance(exc.detail, dict) and {"code", "message"} <= set(exc.detail):
+        return JSONResponse(status_code=exc.status_code, content=exc.detail)
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"code": exc.status_code, "message": str(exc.detail)},
     )
 
 
 def install_module(app: FastAPI):
-
-    @app.exception_handler(StarletteHTTPException)
-    async def _http_exception_handler(_request: Request,
-                                      exc: StarletteHTTPException):
-        if isinstance(exc.detail, dict) and {"code", "message"} <= set(
-                exc.detail):
-            return JSONResponse(status_code=exc.status_code,
-                                content=exc.detail)
-        return JSONResponse(
-            status_code=exc.status_code,
-            content={
-                "code": exc.status_code,
-                "message": str(exc.detail)
-            },
-        )
 
     @app.get("/health")
     @app.get("/v1/health.get", response_model=HealthResult)
@@ -94,7 +79,7 @@ def install_module(app: FastAPI):
         )
 
     @app.get("/topics")
-    @app.get("/v1/topics.list", response_model=TopicsListResult)
+    @app.post("/v1/topics.list", response_model=TopicsListResult)
     async def _get_topics(
             request: Request,
             body: TopicsListParams | None = None) -> TopicsListResult:
@@ -113,13 +98,16 @@ def install_module(app: FastAPI):
 
     @app.post("/v1/clip.get", response_model=ClipGetResult)
     async def _post_get_clip(body: ClipGetParams,
-                             request: Request) -> ClipGetResult | JSONResponse:
+                             request: Request) -> ClipGetResult:
         info(f"request from: {request.client} headers: {request.headers}")
 
         content: TopicData | None = await enqueue_request_topic(
             app, body.topic)
         if content is None:
-            return ClipGetResult(item=_empty_clipboard_item(body.topic))
+            raise HTTPException(
+                status_code=404,
+                detail={"code": 1001, "message": "Topic not found", "data": {"topic": body.topic}},
+            )
         return ClipGetResult(item=_topic_data_to_clipboard_item(content))
 
     @app.post("/v1/clip.put", response_model=ClipPutResult)

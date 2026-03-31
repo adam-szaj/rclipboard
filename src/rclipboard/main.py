@@ -6,6 +6,7 @@ from contextlib import asynccontextmanager
 from logging import Logger
 
 from fastapi import FastAPI
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 import rclipboard.fifo as fifo_mod
 import rclipboard.http as http_mod
@@ -66,6 +67,7 @@ async def lifespan(app: FastAPI):
 
 def create_app() -> FastAPI:
     app = FastAPI(title="rclipboard", version="0.1.0", lifespan=lifespan)
+    app.add_exception_handler(StarletteHTTPException, http_mod._http_exception_handler)
     return app
 
 

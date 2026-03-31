@@ -84,6 +84,7 @@ class FunctionalFIFOTests(unittest.TestCase):
                 wait_for_path(put_fifo)
                 with put_fifo.open("wb") as f:
                     f.write(b"from-fifo")
+                wait_for_file_bytes(Path(root) / "state.p", b"from-fifo")
 
                 status, body = post_json(
                     f"http://127.0.0.1:{port}/v1/clip.get",

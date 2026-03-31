@@ -30,7 +30,7 @@ EXPECTED_SCRIPTS = [
     "rctrl-c",
     "rctrl-v",
     "rclip-smoke.sh",
-    "rclipboard-tunel",
+    "rcliptunel",
     "install-systemd-user.sh",
 ]
 
@@ -177,7 +177,7 @@ class InstallerLayoutTests(unittest.TestCase):
 
     def test_main_service_has_environment_file(self) -> None:
         text = (self.unit_dir / "rclipboard.service").read_text()
-        self.assertIn("EnvironmentFile=%t/rclipboard/env", text)
+        self.assertIn("EnvironmentFile=-%t/rclipboard/env", text)
 
     def test_working_directory_in_unit(self) -> None:
         text = (self.unit_dir / "rclipboard.service").read_text()

@@ -26,6 +26,7 @@ def free_port() -> int:
 def base_env(**extra: str) -> dict[str, str]:
     env = os.environ.copy()
     env["PYTHONPATH"] = str(ROOT_DIR / "src")
+    env["RCLIPBOARD_CONFIG"] = "/dev/null"  # disable user config.toml in tests
     env["RCLIPBOARD_XSEL"] = "0"
     env["RCLIPBOARD_LOG_LEVEL"] = "warning"
     env["RCLIPBOARD_PY_LOG_LEVEL"] = "WARNING"

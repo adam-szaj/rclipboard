@@ -221,7 +221,7 @@ resolve_candidates() {
     fi
     if [ -n "$FIFO" ]; then ENV_FIFO="$FIFO"; fi
     if [ -n "$UDS" ];  then ENV_UDS="$UDS"; fi
-    ENV_TCP="http://${HOST}:${PORT}"
+    if [ -z "$ENV_TCP" ]; then ENV_TCP="http://${HOST}:${PORT}"; fi
 }
 
 select_transport() {

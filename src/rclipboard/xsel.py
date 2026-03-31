@@ -33,7 +33,8 @@ XSEL_ENABLED: bool = os.environ.get("RCLIPBOARD_XSEL", "0") not in (
 )
 
 POLL_INTERVAL_MS: int = int(
-    os.environ.get("RCLIPBOARD_XSEL_INTERVAL_MS", "500"))
+    os.environ.get("RCLIPBOARD_XSEL_INTERVAL_MS", "500")
+)
 
 # Topic to xsel option mapping
 TOPIC_TO_XSEL = {
@@ -74,11 +75,13 @@ async def _exec(
     )
     try:
         if input_data is None:
-            stdout, stderr = await a.wait_for(proc.communicate(),
-                                              timeout=timeout)
+            stdout, stderr = await a.wait_for(
+                proc.communicate(), timeout=timeout
+            )
         else:
             stdout, stderr = await a.wait_for(
-                proc.communicate(input=input_data), timeout=timeout)
+                proc.communicate(input=input_data), timeout=timeout
+            )
         return (
             proc.returncode if proc.returncode is not None else -1,
             stdout or b"",
@@ -115,7 +118,6 @@ async def write_selection(opt: str, data: bytes, timeout: float) -> None:
 
 
 class XselState:
-
     def __init__(self, selection: str, opt: str):
         self.selection: str = selection
         self.opt: str = opt
@@ -127,7 +129,6 @@ class XselState:
 
 
 class XselInterface(BidirectionalInterface):
-
     def __init__(self, app: FastAPI):
         BidirectionalInterface.__init__(self)
         self.app = app
@@ -178,7 +179,7 @@ class XselInterface(BidirectionalInterface):
         info(f"topic: {topic} opt: {opt}")
         if not opt:
             return
-        value: str | dict[str, str] = data.value
+        value: str = data.value
         value_type: str = data.value_type
         value_encoding: str = data.value_encoding
         # compute bytes
@@ -192,9 +193,7 @@ class XselInterface(BidirectionalInterface):
             assert isinstance(value, str)
             data_bytes = value.encode()
 
-        info(f"write_selection start: {data_bytes}")
         await write_selection(opt, data_bytes, timeout=2.5)
-        info("write_selection done")
 
         # remember last applied and seen
         ts = utc_timestamp()
@@ -233,9 +232,9 @@ class XselInterface(BidirectionalInterface):
             self.app,
             TopicData(
                 topic=topic,
-                value=ValueData(value=_b64(current),
-                                type="binary",
-                                encoding="base64"),
+                value=ValueData(
+                    value=_b64(current), type="binary", encoding="base64"
+                ),
                 meta={"app": "xsel"},
             ),
             source=self,

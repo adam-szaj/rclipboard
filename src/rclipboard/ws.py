@@ -137,7 +137,7 @@ class WSServerConnection(BidirectionalInterface):
         if new_topics:
             contents = subscribe_client(self.app, self, new_topics)
             self.topics.update(new_topics)
-        return ClipWatchResult(contents=contents)
+        return ClipWatchResult(topics=list(self.topics), contents=contents)
 
     async def _handle_clip_unwatch(
         self, request: JSONRPCRequestMessage
@@ -149,7 +149,7 @@ class WSServerConnection(BidirectionalInterface):
         if remove_topics:
             unsubscribe_client(self.app, self, remove_topics)
             self.topics.difference_update(remove_topics)
-        return ClipWatchResult(contents={})
+        return ClipWatchResult(topics=list(self.topics))
 
     async def _handle_topics_list(
         self, _request: JSONRPCRequestMessage
