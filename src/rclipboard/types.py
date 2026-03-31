@@ -3,7 +3,7 @@ import re
 from abc import ABC, abstractmethod
 from typing import Annotated, Literal, override
 
-from pydantic import BaseModel, ConfigDict, Field, Json, JsonValue, field_validator
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator
 
 _TOPIC_RE = re.compile(r'^[a-zA-Z0-9_-]{1,64}$')
 
@@ -28,10 +28,8 @@ class BidirectionalInterface(Interface):
         self.topics: set[str] = set()
 
     @abstractmethod
-    async def send(self, data: dict[str, JsonValue]):
+    async def send(self, data: "TopicData"):
         pass
-
-    pass
 
 
 class ValueData(BaseModel):

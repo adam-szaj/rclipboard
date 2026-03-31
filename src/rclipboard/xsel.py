@@ -26,7 +26,7 @@ debug = logger.debug
 trace = logger.debug
 
 XSEL_PATH: Path = Path(os.environ.get("RCLIPBOARD_XSEL_PATH", "/usr/bin/xsel"))
-XSEL_ENABLED: bool = os.environ.get("RCLIPBOARD_XSEL", "1") not in (
+XSEL_ENABLED: bool = os.environ.get("RCLIPBOARD_XSEL", "0") not in (
     "0",
     "false",
     "False",
@@ -121,8 +121,8 @@ class XselState:
         self.opt: str = opt
         self.applied: bytes = b""
         self.seen: bytes = b""
-        self.applied_ts: str | None = ""
-        self.seen_ts: str | None = ""
+        self.applied_ts: str = ""
+        self.seen_ts: str = ""
         self.poll_ts: str | None = None
 
 
@@ -264,9 +264,7 @@ class XselInterface(BidirectionalInterface):
 
             await self.read_items()
 
-    async def send(self, data: object):
-        if not isinstance(data, TopicData):
-            return
+    async def send(self, data: TopicData):
         try:
             self.queue.put_nowait(data)
         except a.QueueFull:

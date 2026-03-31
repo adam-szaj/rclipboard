@@ -56,21 +56,18 @@ class WSServerConnection(BidirectionalInterface):
     def name(self) -> str:
         return "wsconnection"
 
-    async def send(self, payload: object):
-        if isinstance(payload, TopicData):
-            await self._send_event(
-                "clip.changed",
-                {
-                    "items": [
-                        _topic_data_to_clipboard_item(payload).model_dump(
-                            mode="json"
-                        )
-                    ],
-                    "meta": payload.meta,
-                },
-            )
-            return
-        await self.ws.send_json(payload)
+    async def send(self, data: TopicData):
+        await self._send_event(
+            "clip.changed",
+            {
+                "items": [
+                    _topic_data_to_clipboard_item(data).model_dump(
+                        mode="json"
+                    )
+                ],
+                "meta": data.meta,
+            },
+        )
 
     async def _send_result(
         self, request_id: int | str | None, result: object
@@ -136,6 +133,7 @@ class WSServerConnection(BidirectionalInterface):
         new_topics = [
             topic for topic in params.topics if topic not in self.topics
         ]
+        contents = {}
         if new_topics:
             contents = subscribe_client(self.app, self, new_topics)
             self.topics.update(new_topics)

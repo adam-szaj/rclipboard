@@ -70,8 +70,9 @@ class ProxyClient(BidirectionalInterface):
         return "ProxyClient"
 
     @override
-    async def send(self, data: dict[str, JsonValue]):
-        await self._send_json(data)
+    async def send(self, data: TopicData):
+        item = topic_data_to_clipboard_item(data)
+        await self.send_clip(item, meta=data.meta)
 
     async def _send_json(self, payload: dict[str, JsonValue]) -> None:
         if self.ws is None:

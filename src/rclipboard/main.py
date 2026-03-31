@@ -44,7 +44,7 @@ async def shutdown(app: FastAPI):
     await proxy_mod.shutdown_proxy(app)
 
     if os.environ.get("RCLIPBOARD_XSEL", "0") != "0":
-       await xsel_mod.shutdown_xsel(app)
+        await xsel_mod.shutdown_xsel(app)
     await fifo_mod.shutdown_fifo(app)
 
     task = getattr(app.state.main, "dispatcher_task", None)
