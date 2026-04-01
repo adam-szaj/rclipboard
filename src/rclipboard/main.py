@@ -26,7 +26,6 @@ trace = logger.debug
 
 async def startup(app: FastAPI):
     app.state.main = AppState(app)
-    app.state.local_topic_data_hooks = []
     app.state.runtime_state_hooks = []
     # HTTP routes
     http_mod.install_module(app)
@@ -42,11 +41,12 @@ async def startup(app: FastAPI):
 
 
 async def shutdown(app: FastAPI):
-    await proxy_mod.shutdown_proxy(app)
-
-    if os.environ.get("RCLIPBOARD_XSEL", "0") != "0":
-        await xsel_mod.shutdown_xsel(app)
-    await fifo_mod.shutdown_fifo(app)
+    xsel_enabled = os.environ.get("RCLIPBOARD_XSEL", "0") != "0"
+    async with asyncio.TaskGroup() as tg:
+        tg.create_task(proxy_mod.shutdown_proxy(app))
+        tg.create_task(fifo_mod.shutdown_fifo(app))
+        if xsel_enabled:
+            tg.create_task(xsel_mod.shutdown_xsel(app))
 
     main: AppState = app.state.main
     await main.cancel_background_tasks()

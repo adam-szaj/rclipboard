@@ -7,6 +7,7 @@ from logging import Logger
 from pathlib import Path
 
 from fastapi import FastAPI
+from pydantic import JsonValue
 
 # from asyncio.timeouts import timeout
 from rclipboard.app_state import (
@@ -162,14 +163,14 @@ class XselInterface(BidirectionalInterface):
     def good(self) -> bool:
         return bool(self.enabled and os.environ.get("DISPLAY") and self.task)
 
-    def status(self) -> dict[str, object]:
+    def status(self) -> dict[str, JsonValue]:
         return {
             "enabled": self.enabled,
             "good": self.good,
             "path": str(XSEL_PATH),
             "display": os.environ.get("DISPLAY", ""),
             "interval_ms": POLL_INTERVAL_MS,
-            "topics": sorted(self.selection_states.keys()),
+            "topics": list(sorted(self.selection_states.keys())),
             "last_error": self.last_error,
         }
 
@@ -301,7 +302,7 @@ async def shutdown_xsel(app: FastAPI) -> None:
         await conn.shutdown()
 
 
-def get_xsel_status(app: FastAPI) -> dict[str, object]:
+def get_xsel_status(app: FastAPI) -> dict[str, JsonValue]:
     conn: XselInterface | None = getattr(app.state, "xsel", None)
     if conn is None:
         return {
@@ -310,7 +311,7 @@ def get_xsel_status(app: FastAPI) -> dict[str, object]:
             "path": str(XSEL_PATH),
             "display": os.environ.get("DISPLAY", ""),
             "interval_ms": POLL_INTERVAL_MS,
-            "topics": sorted(TOPIC_TO_XSEL.keys()),
+            "topics": list(sorted(TOPIC_TO_XSEL.keys())),
             "last_error": None,
         }
     return conn.status()

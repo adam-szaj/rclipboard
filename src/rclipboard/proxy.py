@@ -12,7 +12,13 @@ from pydantic import JsonValue
 from fastapi import FastAPI
 from websockets.asyncio.client import connect, unix_connect
 
-from rclipboard.app_state import enqueue_topic_data
+from rclipboard.app_state import (
+    enqueue_topic_data,
+    register_client,
+    subscribe_client,
+    unregister_client,
+    unsubscribe_client,
+)
 from rclipboard.helpers import (
     clipboard_item_to_topic_data,
     next_id,
@@ -209,7 +215,8 @@ def install_proxy(app: FastAPI) -> None:
 
     client = ProxyClient(app, **_make_ws_url())
     app.state.proxy_client = client
-    app.state.local_topic_data_hooks.append(on_local_topic_data)
+    register_client(app, client)
+    subscribe_client(app, client, list(client.topics))
     app.state.proxy_task = a.create_task(client.run(), name="proxy_upstream")
 
 
@@ -220,34 +227,13 @@ async def shutdown_proxy(app: FastAPI) -> None:
     task.cancel()
     with contextlib.suppress(a.CancelledError):
         await task
+    client: ProxyClient | None = getattr(app.state, "proxy_client", None)
+    if client:
+        unsubscribe_client(app, client, list(client.topics))
+        unregister_client(app, client)
     app.state.proxy_task = None
     app.state.proxy_connected = False
     app.state.proxy_enabled = False
 
 
-async def on_local_topic_data(app: FastAPI, topic_data: TopicData, source: Any) -> None:
-    """
-    Forward locally accepted clipboard updates to the upstream server.
-
-    Events originating from this proxy are ignored to prevent loops:
-    upstream `clip.changed` -> local store -> re-forward upstream.
-    """
-    info(f"on_local_topic_data: {topic_data}")
-    if not getattr(app.state, "proxy_enabled", False):
-        return
-    client: ProxyClient | None = getattr(app.state, "proxy_client", None)
-    if not client or not client.connected:
-        return
-    if source is client:
-        return
-    try:
-        await client.send_clip(
-            _topic_data_to_clipboard_item(topic_data),
-            meta=topic_data.meta,
-        )
-    except Exception as exc:
-        debug(f"proxy forward error: {exc}", exc_info=True)
-
-
-_topic_data_to_clipboard_item = topic_data_to_clipboard_item
 _clipboard_item_to_topic_data = clipboard_item_to_topic_data

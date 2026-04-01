@@ -191,12 +191,6 @@ class AppState:
                 await conn.send(topic_data.data)
 
     async def _notify_topic_data(self, topic_data: InternalTopicData) -> None:
-        hooks = list(getattr(self.app.state, "local_topic_data_hooks", []))
-        hook = getattr(self.app.state, "on_local_topic_data", None)
-        if hook:
-            hooks.append(hook)
-        for item_hook in hooks:
-            await item_hook(self.app, topic_data.data, topic_data.source)
         await self._dispatch_data_item(topic_data)
 
     async def _delayed_notify(self, topic: str) -> None:

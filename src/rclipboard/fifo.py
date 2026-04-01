@@ -8,12 +8,18 @@ import os
 import tempfile
 from logging import Logger
 from pathlib import Path
-from typing import Any
-
+from typing import override
 import aiofiles as af
 from fastapi import FastAPI
 
-from rclipboard.app_state import enqueue_request_topics, enqueue_topic_data
+from rclipboard.app_state import (
+    enqueue_request_topics,
+    enqueue_topic_data,
+    register_client,
+    subscribe_client,
+    unregister_client,
+    unsubscribe_client,
+)
 from rclipboard.helpers import (
     clipboard_item_to_topic_data,
     fifo_dir_from_env,
@@ -21,6 +27,7 @@ from rclipboard.helpers import (
 )
 from rclipboard.log import get_logger
 from rclipboard.types import (
+    BidirectionalInterface,
     ClipGetResult,
     ClipPutParams,
     HealthResult,
@@ -116,13 +123,21 @@ async def _read_fifo_bytes(path: Path) -> bytes:
         return await f.read()
 
 
-class FIFOTransport:
+class FIFOTransport(BidirectionalInterface):
     def __init__(self, app: FastAPI, root: Path):
+        BidirectionalInterface.__init__(self)
         self.app = app
         self.root = root
         info(f"fifo root: {root}")
         self.reader_tasks: dict[str, tuple[a.Task[None], a.Task[None]]] = {}
         self.snapshot_cache: dict[str, bytes] = {}
+
+    @property
+    def name(self) -> str:
+        return "fifo"
+
+    def __repr__(self) -> str:
+        return f"fifo:{self.root}"
 
     async def start(self) -> None:
         self.root.mkdir(parents=True, exist_ok=True)
@@ -252,17 +267,10 @@ class FIFOTransport:
         await _write_atomic(path, payload)
         self.snapshot_cache[name] = payload
 
-    async def on_topic_data(
-        self, _app: FastAPI, topic_data: TopicData, _source: Any
-    ) -> None:
-        if topic_data.topic not in DEFAULT_TOPICS_SET:
-            debug(
-                f"fifo ignored state update for unsupported topic: {topic_data.topic}"
-            )
-            return
+    @override
+    async def send(self, topic_data: TopicData) -> None:
         self.ensure_topic(topic_data.topic)
         paths = _topic_paths(self.root, topic_data.topic)
-        info(f"paths: {paths}")
         try:
             await _write_atomic(
                 paths["state_raw"], _topic_data_to_bytes(topic_data)
@@ -295,7 +303,8 @@ def install_fifo(app: FastAPI) -> None:
         return
     transport = FIFOTransport(app, Path(fifo_dir))
     app.state.fifo_transport = transport
-    app.state.local_topic_data_hooks.append(transport.on_topic_data)
+    register_client(app, transport)
+    subscribe_client(app, transport, DEFAULT_TOPICS)
     app.state.runtime_state_hooks.append(transport.on_runtime_state_change)
     app.state.fifo_start_task = a.create_task(
         transport.start(), name="fifo_start"
@@ -317,5 +326,7 @@ async def shutdown_fifo(app: FastAPI) -> None:
     )
     if transport is None:
         return
+    unsubscribe_client(app, transport, DEFAULT_TOPICS)
+    unregister_client(app, transport)
     await transport.stop()
     app.state.fifo_transport = None

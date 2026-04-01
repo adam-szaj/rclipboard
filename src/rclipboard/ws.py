@@ -4,7 +4,7 @@ import json
 from typing import override
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from pydantic import ValidationError
+from pydantic import JsonValue, ValidationError
 
 from .app_state import (
     enqueue_request_topic,
@@ -19,9 +19,9 @@ from .helpers import clipboard_item_to_topic_data, topic_data_to_clipboard_item
 from .log import get_logger as gl
 from .types import (
     BidirectionalInterface,
+    ClipboardItem,
     ClipGetParams,
     ClipGetResult,
-    ClipboardItem,
     ClipPutParams,
     ClipPutResult,
     ClipWatchParams,
@@ -61,22 +61,20 @@ class WSServerConnection(BidirectionalInterface):
             "clip.changed",
             {
                 "items": [
-                    _topic_data_to_clipboard_item(data).model_dump(
-                        mode="json"
-                    )
+                    _topic_data_to_clipboard_item(data).model_dump(mode="json")
                 ],
                 "meta": data.meta,
             },
         )
 
     async def _send_result(
-        self, request_id: int | str | None, result: object
+        self, request_id: int | str | None, result: JsonValue
     ) -> None:
         if request_id is None:
             return
         await self.ws.send_json(
             JSONRPCResponseMessage(
-                id=request_id,
+                mid=request_id,
                 jsonrpc="2.0",
                 result=result,
             ).model_dump(by_alias=True, mode="json", exclude_none=True)
@@ -89,7 +87,7 @@ class WSServerConnection(BidirectionalInterface):
             return
         await self.ws.send_json(
             JSONRPCResponseMessage(
-                id=request_id,
+                mid=request_id,
                 jsonrpc="2.0",
                 error=rpc_error,
             ).model_dump(by_alias=True, mode="json", exclude_none=True)
@@ -211,9 +209,13 @@ class WSServerConnection(BidirectionalInterface):
                 result.model_dump(mode="json"),
             )
         except RPCMethodError as exc:
+            exc_data = exc.data
+            if not isinstance(exc_data, dict):
+                exc_data = json.dumps(exc_data)
+
             await self._send_error(
                 request.mid,
-                RPCError(code=exc.code, message=exc.message, data=exc.data),
+                RPCError(code=exc.code, message=exc.message, data=exc_data),
             )
         except ValidationError as exc:
             await self._send_error(
