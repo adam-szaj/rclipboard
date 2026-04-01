@@ -331,6 +331,7 @@ async def shutdown_fifo(app: FastAPI) -> None:
     if transport is None:
         return
     unsubscribe_client(app, transport, DEFAULT_TOPICS)
+    await transport.stop_drainer()
     unregister_client(app, transport)
     await transport.stop()
     app.state.fifo_transport = None

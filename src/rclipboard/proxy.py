@@ -60,6 +60,7 @@ class ProxyClient(BidirectionalInterface):
         path: str = "",
         topics: list[str] | set[str] | None = None,
     ):
+        BidirectionalInterface.__init__(self)
         self.app = app
         self.url = url
         self.path = path
@@ -230,6 +231,7 @@ async def shutdown_proxy(app: FastAPI) -> None:
     client: ProxyClient | None = getattr(app.state, "proxy_client", None)
     if client:
         unsubscribe_client(app, client, list(client.topics))
+        await client.stop_drainer()
         unregister_client(app, client)
     app.state.proxy_task = None
     app.state.proxy_connected = False
@@ -248,8 +250,7 @@ def get_proxy_status(app: FastAPI) -> dict[str, JsonValue]:
             "topics": list(conn.topics),
             "last_error": None,
         }
-    raise RuntimeError("no proxy")
-    return {"enabled": False, "good": True}
+    return {"enabled": False, "good": False}
 
 
 _clipboard_item_to_topic_data = clipboard_item_to_topic_data

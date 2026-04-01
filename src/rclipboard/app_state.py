@@ -150,6 +150,8 @@ class AppState:
 
     def register_client(self, client: Interface):
         self.clients.append(client)
+        if isinstance(client, BidirectionalInterface):
+            client.start_drainer()
         self._emit_runtime_state_change("clients")
 
     def unregister_client(self, client: Interface):
@@ -179,7 +181,7 @@ class AppState:
         assert isinstance(topic_data, InternalTopicData)
         self.topic_content[topic_data.topic] = topic_data
 
-    async def _dispatch_data_item(self, topic_data: InternalTopicData):
+    def _dispatch_data_item(self, topic_data: InternalTopicData) -> None:
         subs: set[Interface] | None = self.subs.get(topic_data.topic)
         if not subs:
             return
@@ -188,10 +190,10 @@ class AppState:
             if isinstance(conn, BidirectionalInterface):
                 if source and conn is source:
                     continue
-                await conn.send(topic_data.data)
+                conn.deliver(topic_data.data)
 
     async def _notify_topic_data(self, topic_data: InternalTopicData) -> None:
-        await self._dispatch_data_item(topic_data)
+        self._dispatch_data_item(topic_data)
 
     async def _delayed_notify(self, topic: str) -> None:
         try:

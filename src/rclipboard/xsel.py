@@ -146,7 +146,6 @@ class XselInterface(BidirectionalInterface):
             "interval_ms": POLL_INTERVAL_MS,
         }
         self.health: dict | None = None
-        self.queue: a.Queue = a.Queue(maxsize=32)
 
         if self.enabled:
             info("start xsel task")
@@ -243,44 +242,20 @@ class XselInterface(BidirectionalInterface):
 
     async def poller(self):
         interval = POLL_INTERVAL_MS / 1000.0
-        q: a.Queue = self.queue
         while True:
             try:
-                item = await a.wait_for(q.get(), timeout=interval)
-                info(f"xsel got item: {item}")
-                # Drain any burst to reduce context switching
-                q.task_done()
-                topic = item.topic
-                info("write_item start")
-                await self.write_item(topic, item)
-                info("write_item done")
-
-            except a.TimeoutError:
-                # trace("xsel poller write wait timeout")
-                pass
-            except Exception as e:
-                self.last_error = str(e)
-                debug(f"xsel write error: {e}", exc_info=True)
-
+                await a.sleep(interval)
+            except a.CancelledError:
+                raise
             await self.read_items()
 
-    async def send(self, data: TopicData):
-        try:
-            self.queue.put_nowait(data)
-        except a.QueueFull:
-            self.last_error = "write queue full"
-            warning("xsel write queue full; dropping update")
+    async def send(self, data: TopicData) -> None:
+        await self.write_item(data.topic, data)
 
     async def shutdown(self) -> None:
         if not self.task:
             return
-        while not self.queue.empty():
-            try:
-                item: TopicData = self.queue.get_nowait()
-                self.queue.task_done()
-                await self.write_item(item.topic, item)
-            except Exception:
-                break
+        await self.stop_drainer()
         self.task.cancel()
         try:
             await self.task

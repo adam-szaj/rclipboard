@@ -19,7 +19,7 @@ RCLIPBOARD_PY_LOG_LEVEL := INFO
 
 # Docker
 IMAGE ?= rclipboard:latest
-TUNEL_TEST_IMAGE ?= rclipboard-tunel-test:latest
+TUNEL_TEST_IMAGE ?= rcliptunel-test:latest
 
 .PHONY: help install run run-dev run-uds run-https run-proxy run-dev-proxy cert cert-san health status topics docker-build docker-run docker-run-proxy docker-build-tunel-test plugin-install plugin-uninstall plugin-reload plugin-demo smoke proxy-smoke test test-functional test-integration test-http test-ws test-proxy-integration test-tunel systemd-user-install systemd-user-enable systemd-user-enable-socket systemd-user-disable nvim-plugin-install nvim-plugin-pack
 
@@ -71,10 +71,10 @@ help:
 install: .venv
 
 install-exe:
-	install -m 0755 ./scripts/rclipctl ~/bin/rclipctl
-	install -m 0755 ./scripts/rctrl-c ~/bin/rctrl-c
-	install -m 0755 ./scripts/rctrl-v ~/bin/rctrl-v
-	install -m 0755 ./scripts/rclipboard-tunel ~/bin/rclipboard-tunel
+	install -m 0755 ./scripts/bin/rclipctl ~/bin/rclipctl
+	install -m 0755 ./scripts/bin/rctrl-c ~/bin/rctrl-c
+	install -m 0755 ./scripts/bin/rctrl-v ~/bin/rctrl-v
+	install -m 0755 ./scripts/bin/rcliptunel ~/bin/rcliptunel
 
 run: .venv
 	RCLIPBOARD_PROXY=0 \

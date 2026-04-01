@@ -44,7 +44,7 @@ keyfile  = ""
 
 [client]
 # Transport preference for rclipctl: auto | fifo | uds | tcp
-transport = "auto"
+transport = "uds"
 
 # Override which endpoint rclipctl connects to.
 # Defaults to server.endpoint when empty.

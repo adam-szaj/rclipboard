@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# rclipboard-tunel — establish an SSH tunnel for rclipboard
+# rcliptunel — establish an SSH tunnel for rclipboard
 #
 # Supports all four socket-type combinations via OpenSSH's -L / -R:
 #
@@ -22,7 +22,7 @@ unset _RUNTIME_ENV
 usage() {
     cat << EOF
 Usage:
-  rclipboard-tunel --ssh <user@host> [OPTIONS] [-- <extra ssh args>]
+  rcliptunel --ssh <user@host> [OPTIONS] [-- <extra ssh args>]
 
 Endpoint options (format: tcp:HOST:PORT  or  uds:///path/to.sock):
   --local  <endpoint>   local server endpoint       (default: from env/config)
@@ -44,12 +44,12 @@ Other:
 
 Examples:
   # Share local UDS server with remote machine (remote proxy on TCP 8988):
-  rclipboard-tunel --local uds:///run/user/1000/rclipboard/uds.sock \\
+  rcliptunel --local uds:///run/user/1000/rclipboard/uds.sock \\
                    --remote tcp:127.0.0.1:8988 \\
                    --ssh user@remotehost
 
   # Expose remote TCP server locally via UDS:
-  rclipboard-tunel --local uds:///run/user/1000/rclipboard/proxy.sock \\
+  rcliptunel --local uds:///run/user/1000/rclipboard/proxy.sock \\
                    --remote tcp:127.0.0.1:8989 \\
                    --ssh user@remotehost --forward
 EOF

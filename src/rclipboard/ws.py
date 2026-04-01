@@ -75,7 +75,7 @@ class WSServerConnection(BidirectionalInterface):
             return
         await self.ws.send_json(
             JSONRPCResponseMessage(
-                mid=request_id,
+                **{"id": request_id},
                 jsonrpc="2.0",
                 result=result,
             ).model_dump(by_alias=True, mode="json", exclude_none=True)
@@ -88,7 +88,7 @@ class WSServerConnection(BidirectionalInterface):
             return
         await self.ws.send_json(
             JSONRPCResponseMessage(
-                mid=request_id,
+                **{"id": request_id},
                 jsonrpc="2.0",
                 error=rpc_error,
             ).model_dump(by_alias=True, mode="json", exclude_none=True)
@@ -271,6 +271,7 @@ class WSServerConnection(BidirectionalInterface):
             if self.topics:
                 unsubscribe_client(self.app, self, list(self.topics))
                 self.topics.clear()
+            await self.stop_drainer()
             unregister_client(self.app, self)
 
 

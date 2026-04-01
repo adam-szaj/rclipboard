@@ -45,7 +45,7 @@ The following parts are currently implemented and verified:
 
 Requirements:
 
-- Python 3.14+
+- Python 3.11+
 - `uvicorn`
 - `fastapi`
 - `websockets`
@@ -421,9 +421,9 @@ This target:
 - verifies `upstream -> proxy`
 - verifies `proxy -> upstream`
 
-## SSH Tunnel (`rclipboard-tunel`)
+## SSH Tunnel (`rcliptunel`)
 
-`rclipboard-tunel` is a wrapper around `ssh -R` / `ssh -L` that creates a tunnel
+`rcliptunel` is a wrapper around `ssh -R` / `ssh -L` that creates a tunnel
 between a local rclipboard endpoint and a remote host.  All four socket-type
 combinations are supported:
 
@@ -472,7 +472,7 @@ sudo rc-service sshd reload
 Share a local UDS server with the remote machine (remote proxy connects via TCP):
 
 ```bash
-rclipboard-tunel \
+rcliptunel \
   --local  uds:///run/user/1000/rclipboard/uds.sock \
   --remote tcp:127.0.0.1:8988 \
   --ssh    user@remotehost
@@ -481,7 +481,7 @@ rclipboard-tunel \
 Share a local TCP server with the remote machine via a remote UDS socket:
 
 ```bash
-rclipboard-tunel \
+rcliptunel \
   --local  tcp:127.0.0.1:8989 \
   --remote uds:///run/user/1000/rclipboard/proxy.sock \
   --ssh    user@remotehost
@@ -490,7 +490,7 @@ rclipboard-tunel \
 Forward a remote TCP server to a local UDS socket (`--forward` = `ssh -L`):
 
 ```bash
-rclipboard-tunel \
+rcliptunel \
   --local  uds:///run/user/1000/rclipboard/proxy.sock \
   --remote tcp:127.0.0.1:8989 \
   --ssh    user@remotehost \
@@ -500,7 +500,7 @@ rclipboard-tunel \
 Run in the background and read settings from `config.toml`:
 
 ```bash
-rclipboard-tunel \
+rcliptunel \
   --ssh user@remotehost \
   --config ~/.config/rclipboard/config.toml \
   --daemonize
@@ -508,7 +508,7 @@ rclipboard-tunel \
 
 ### TOML configuration
 
-`rclipboard-tunel` reads the same `config.toml` as the server when `--config` is
+`rcliptunel` reads the same `config.toml` as the server when `--config` is
 given, or sources `~/.config/rclipboard/env` when that file exists.  The relevant
 fields are `server.endpoint` (used as the default `--local` value) and the proxy
 `upstream_endpoint` port (used as the default `--remote` TCP port).
