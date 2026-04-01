@@ -26,6 +26,7 @@ from .app_state import (
 from .log import get_logger
 from .types import Interface
 from .xsel import get_xsel_status
+from .proxy import get_proxy_status
 
 error = (get_logger(__name__)).error
 warning = (get_logger(__name__)).warning
@@ -56,10 +57,13 @@ def install_module(app: FastAPI):
     async def _health(request: Request):
         info(f"request from: {request.client}")
         xsel = get_xsel_status(app)
+        proxy = get_proxy_status(app)
         return HealthResult(
             ok=True,
             xsel_enabled=bool(xsel["enabled"]),
             xsel_good=bool(xsel["good"]),
+            proxy_enabled=bool(proxy["enabled"]),
+            proxy_good=bool(proxy["good"]),
         )
 
     @app.get("/status")
@@ -71,11 +75,13 @@ def install_module(app: FastAPI):
             client.name for client in getattr(app.state.main, "clients", [])
             if isinstance(client, Interface)
         ]
+        proxy = get_proxy_status(self.app)
         return StatusResult(
             ok=True,
             topics=topics,
             clients=clients,
             xsel=get_xsel_status(app),
+            proxy=get_proxy_status(app),
         )
 
     @app.get("/topics")

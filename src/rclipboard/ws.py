@@ -35,6 +35,7 @@ from .types import (
     TopicsListResult,
 )
 from .xsel import get_xsel_status
+from .proxy import get_proxy_status
 
 logger = gl(__name__)
 error = logger.error
@@ -164,21 +165,26 @@ class WSServerConnection(BidirectionalInterface):
             for client in getattr(self.app.state.main, "clients", [])
             if hasattr(client, "name")
         ]
+        proxy=get_proxy_status(self.app)
         return StatusResult(
             ok=True,
             topics=list(sorted(topics)),
             clients=clients,
             xsel=get_xsel_status(self.app),
+            proxy=proxy,
         )
 
     async def _handle_health_get(
         self, _request: JSONRPCRequestMessage
     ) -> HealthResult:
         xsel = get_xsel_status(self.app)
+        proxy = get_proxy_status(self.app)
         return HealthResult(
             ok=True,
             xsel_enabled=bool(xsel["enabled"]),
             xsel_good=bool(xsel["good"]),
+            proxy_enabled=bool(proxy["enabled"]),
+            proxy_good=bool(proxy["good"]),
         )
 
     async def handle_request(self, request: JSONRPCRequestMessage) -> None:

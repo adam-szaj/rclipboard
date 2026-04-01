@@ -236,4 +236,20 @@ async def shutdown_proxy(app: FastAPI) -> None:
     app.state.proxy_enabled = False
 
 
+def get_proxy_status(app: FastAPI) -> dict[str, JsonValue]:
+    conn: ProxyClient | None = getattr(app.state, "proxy_client", None)
+    if conn:
+        return {
+            "enabled": True,
+            "good": conn.connected,
+            "path": conn.path,
+            "url": conn.url,
+            "unix": conn.unix,
+            "topics": list(conn.topics),
+            "last_error": None,
+        }
+    raise RuntimeError("no proxy")
+    return {"enabled": False, "good": True}
+
+
 _clipboard_item_to_topic_data = clipboard_item_to_topic_data

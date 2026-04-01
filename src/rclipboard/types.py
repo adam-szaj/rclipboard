@@ -120,6 +120,8 @@ class HealthResult(BaseModel):
     ok: bool
     xsel_enabled: bool = False
     xsel_good: bool = False
+    proxy_enabled: bool = False
+    proxy_good: bool = False
 
 
 class StatusResult(BaseModel):
@@ -127,6 +129,7 @@ class StatusResult(BaseModel):
     topics: list[str] = Field(default_factory=list)
     clients: list[str] = Field(default_factory=list)
     xsel: dict[str, JsonValue] = Field(default_factory=dict)
+    proxy: dict[str, JsonValue] = Field(default_factory=dict)
 
 
 class InternalTopicData(ABC):

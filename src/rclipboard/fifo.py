@@ -36,6 +36,7 @@ from rclipboard.types import (
     TopicsListResult,
 )
 from rclipboard.xsel import get_xsel_status
+from rclipboard.proxy import get_proxy_status
 
 logger: Logger = get_logger(__name__)
 error = logger.error
@@ -228,6 +229,7 @@ class FIFOTransport(BidirectionalInterface):
             TopicsListResult(topics=topics).model_dump_json().encode("utf-8"),
         )
         xsel = get_xsel_status(self.app)
+        proxy = get_proxy_status(self.app)
         await self._write_snapshot_if_changed(
             "health",
             snapshots["health"],
@@ -235,6 +237,8 @@ class FIFOTransport(BidirectionalInterface):
                 ok=True,
                 xsel_enabled=bool(xsel["enabled"]),
                 xsel_good=bool(xsel["good"]),
+                proxy_enabled=bool(proxy["enabled"]),
+                proxy_good=bool(proxy["good"]),
             )
             .model_dump_json()
             .encode("utf-8"),
