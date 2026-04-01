@@ -21,7 +21,7 @@ RCLIPBOARD_PY_LOG_LEVEL := INFO
 IMAGE ?= rclipboard:latest
 TUNEL_TEST_IMAGE ?= rcliptunel-test:latest
 
-.PHONY: help install run run-dev run-uds run-https run-proxy run-dev-proxy cert cert-san health status topics docker-build docker-run docker-run-proxy docker-build-tunel-test plugin-install plugin-uninstall plugin-reload plugin-demo smoke proxy-smoke test test-functional test-integration test-http test-ws test-proxy-integration test-tunel systemd-user-install systemd-user-enable systemd-user-enable-socket systemd-user-disable nvim-plugin-install nvim-plugin-pack
+.PHONY: help install run run-dev run-uds run-https run-proxy run-dev-proxy cert cert-san health status topics docker-build docker-run docker-run-proxy docker-build-tunel-test plugin-install plugin-uninstall plugin-reload plugin-demo smoke proxy-smoke test test-functional test-integration test-http test-ws test-proxy-integration test-tunel test-https test-wss test-ssl-proxy-integration test-ssl systemd-user-install systemd-user-enable systemd-user-enable-socket systemd-user-disable nvim-plugin-install nvim-plugin-pack
 
 help:
 	@echo "Targets:"
@@ -215,11 +215,13 @@ smoke:
 proxy-smoke:
 	PYTHONPATH=src .venv/bin/python -m tests.run_proxy_smoke
 
-test: test-functional test-integration
+test: test-functional test-integration test-ssl
 
 test-functional: test-http test-ws
 
 test-integration: test-proxy-integration test-tunel
+
+test-ssl: test-https test-wss test-ssl-proxy-integration
 
 test-http:
 	PYTHONPATH=src .venv/bin/python -m unittest tests.test_functional_http -v
@@ -229,6 +231,15 @@ test-ws:
 
 test-proxy-integration:
 	PYTHONPATH=src .venv/bin/python -m unittest tests.test_integration_proxy -v
+
+test-https:
+	PYTHONPATH=src .venv/bin/python -m unittest tests.test_functional_https -v
+
+test-wss:
+	PYTHONPATH=src .venv/bin/python -m unittest tests.test_functional_wss -v
+
+test-ssl-proxy-integration:
+	PYTHONPATH=src .venv/bin/python -m unittest tests.test_integration_proxy_ssl -v
 
 docker-build-tunel-test:
 	docker build -t $(TUNEL_TEST_IMAGE) tests/docker/tunel/

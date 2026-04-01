@@ -4,6 +4,7 @@ import asyncio as a
 import contextlib
 import json
 import os
+import ssl
 from logging import Logger
 from typing import Any, override
 from pathlib import Path
@@ -150,7 +151,8 @@ class ProxyClient(BidirectionalInterface):
             debug(f"unix_connect: path: {self.path} uri={self.url}")
             ws_cm = unix_connect(path=str(self.path), uri=self.url)
         else:
-            ws_cm = connect(self.url)
+            ssl_ctx = _make_upstream_ssl_ctx()
+            ws_cm = connect(self.url, ssl=ssl_ctx) if ssl_ctx is not None else connect(self.url)
 
         async with ws_cm as ws:
             self.ws = ws
@@ -188,6 +190,19 @@ class ProxyClient(BidirectionalInterface):
                 self.app.state.proxy_connected = False
             await a.sleep(backoff)
             backoff = min(backoff * 2, 30.0)
+
+
+def _make_upstream_ssl_ctx() -> ssl.SSLContext | None:
+    """Return an SSL context for the upstream WSS connection, or None for default behaviour.
+
+    Set ``RCLIPBOARD_SSL_CA_BUNDLE`` to the path of a CA certificate file
+    (PEM) to trust a specific CA — useful for self-signed upstream certs in
+    dev/test environments.
+    """
+    ca_bundle = os.environ.get("RCLIPBOARD_SSL_CA_BUNDLE")
+    if ca_bundle:
+        return ssl.create_default_context(cafile=ca_bundle)
+    return None
 
 
 def _make_ws_url() -> dict[str, str | bool | Path]:
