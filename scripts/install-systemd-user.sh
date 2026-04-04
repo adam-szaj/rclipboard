@@ -36,6 +36,12 @@ for f in "$REPO_DIR"/scripts/bin/*; do
         copy_executable "$f" "$BIN_DIR/$(basename "$f")"
     fi
 done
+for f in "$REPO_DIR"/scripts/bash.d/*; do
+    if [ -f "$f" ]; then
+        copy_executable "$f" "$BIN_DIR/.bash.d/$(basename "$f")"
+    fi
+done
+
 
 # ── systemd units ────────────────────────────────────────────────────────────
 for f in \
