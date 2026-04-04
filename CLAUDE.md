@@ -100,25 +100,104 @@ The local HTTP/WS server then serves local clients, reducing SSH round-trips. Th
 | Variable | Purpose |
 |----------|---------|
 | `RCLIPBOARD_ENDPOINT` | Bind address (TCP `host:port`, UDS path, HTTPS, or `fifo://`) |
+| `RCLIPBOARD_RAW_UDS_PATH` | Unix Domain Socket path for JSON-RPC 2.0 NDJSON transport (default: `/tmp/clipboard_raw.sock`) |
 | `RCLIPBOARD_PROXY` | `1` to enable proxy mode |
-| `RCLIPBOARD_UPSTREAM_ADDR/PORT` | Upstream server for proxy |
-| `RCLIPBOARD_FIFO_DIR` | Enable parallel FIFO interface |
+| `RCLIPBOARD_UPSTREAM_ENDPOINT` | Upstream server endpoint for proxy (TCP `host:port`, UDS, or WS URL) |
 | `RCLIPBOARD_XSEL` | `1` to enable X11 clipboard polling |
-| `RCLIPBOARD_NOTIFY_DELAY_MS` | Notification debounce delay (default 250) |
+| `RCLIPBOARD_XSEL_PATH` | Path to `xsel` binary (default: `/usr/bin/xsel`) |
+| `RCLIPBOARD_XSEL_INTERVAL_MS` | X11 clipboard poll interval (default: 500) |
+| `RCLIPBOARD_NOTIFY_DELAY_MS` | Notification debounce delay (default: 250) |
 | `RCLIPBOARD_LOG_LEVEL` | App log level |
+| `RCLIPBOARD_PY_LOG_LEVEL` | Python logging level override |
 | `RCLIPBOARD_SSL_CERTFILE/KEYFILE` | Paths to TLS cert/key for HTTPS |
+| `RCLIPBOARD_SSL_KEYFILE_PASSWORD` | Password for encrypted private key |
+| `RCLIPBOARD_RELOAD` | `1` to enable uvicorn reload mode (dev only) |
+
+### Configuration via config.toml
+
+Configuration can be loaded from `~/.config/rclipboard/config.toml` (or path specified by `RCLIPBOARD_CONFIG`). The config file supports variable expansion via `${VAR}` or `$VAR` syntax (e.g., `${XDG_RUNTIME_DIR}`).
+
+Priority order (highest wins): CLI flags > environment variables > config.toml > built-in defaults.
+
+**Example config.toml** (all sections are optional):
+
+```toml
+[server]
+# Bind address: "127.0.0.1:8989" (TCP), "/tmp/clipboard.sock" (UDS), "0.0.0.0:8989" (TCP any), "wss://localhost:8989" (HTTPS)
+endpoint = "127.0.0.1:8989"
+
+# Raw UDS socket (JSON-RPC 2.0 NDJSON transport)
+# Replaces FIFO for lightweight local clients (shell scripts, editors)
+raw_uds_path = "/tmp/clipboard_raw.sock"
+
+# Log levels: trace, debug, info, warn, error
+log_level = "info"
+py_log_level = "INFO"
+
+# Debounce delay for clip.changed notifications (milliseconds)
+notify_delay_ms = 250
+
+# Development: enable uvicorn auto-reload on file changes
+reload = false
+
+[xsel]
+# X11 clipboard integration (Linux with X11 server)
+enabled = true
+path = "/usr/bin/xsel"
+interval_ms = 500
+
+[proxy]
+# Enable proxy mode (upstream client)
+enabled = false
+
+# Upstream server: "host:port" (TCP), "/path/to/socket" (UDS), "wss://host:port" (WSS)
+# Set only if enabled = true
+upstream_endpoint = "localhost:8989"
+
+[ssl]
+# TLS certificates for HTTPS/WSS
+certfile = ""
+keyfile = ""
+keyfile_password = ""  # optional, for encrypted private keys
+
+[client]
+# rclipctl configuration (not server settings)
+# Transport priority: "fifo", "uds", "tcp"
+transport = ""
+endpoint = ""
+```
+
+**Loading configuration:**
+
+```bash
+# Apply config.toml and start server
+rclipboard config env | xargs -0 env
+make run
+
+# Or directly:
+RCLIPBOARD_CONFIG=~/.config/rclipboard/config.toml make run
+```
+
+The `rclipboard config env` command prints all resolved environment variables (after expansion) as `KEY="value"` lines, suitable for:
+- Shell sourcing: `eval "$(rclipboard config env)"`
+- Systemd `EnvironmentFile=` directive
+- Manual export to `~/.config/rclipboard/env`
 
 ### Startup sequence (`main.py` lifespan)
 
-1. Parse config from env vars
+1. Load and apply `config.toml` settings
 2. Create `AppState` (starts dispatcher task)
-3. Install and register modules in order: proxy → xsel → FIFO → HTTP/WS server
-   - Each module (proxy, xsel, FIFO) registers as a `BidirectionalInterface` subscriber
-   - drainer tasks are started automatically via `start_drainer()` in `register_client()`
+3. Install and register modules in order: proxy → xsel → raw UDS → HTTP/WS server
+   - **Proxy**: `ProxyClient` connects upstream, replicates topics via `clip.watch`, registers as subscriber
+   - **Xsel**: `XselInterface` polls X11 clipboard, registers as subscriber
+   - **Raw UDS** (`/tmp/clipboard_raw.sock`): accepts connections, per-connection subscriber with drainer
+   - **HTTP/WS**: FastAPI/uvicorn handles TCP/UDS endpoint (HTTP REST + WebSocket at `/ws`)
+   - Each module registers as a `BidirectionalInterface` subscriber
+   - Drainer tasks are started automatically via `start_drainer()` in `register_client()`
 4. On shutdown:
    - Cancel background tasks (fire-and-forget tasks tracked in `AppState._background_tasks`)
    - Flush pending notifications
-   - Use `TaskGroup` to shut down proxy/xsel/FIFO modules in parallel
+   - Use `TaskGroup` to shut down proxy/xsel/raw UDS modules in parallel
    - Each shutdown calls `stop_drainer()` before unregister to drain queued updates
    - Cancel the dispatcher task last
    - HTTP/WS server shuts down implicitly when lifespan exits

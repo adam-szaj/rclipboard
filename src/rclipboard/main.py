@@ -8,9 +8,9 @@ from logging import Logger
 from fastapi import FastAPI
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-import rclipboard.fifo as fifo_mod
 import rclipboard.http as http_mod
 import rclipboard.proxy as proxy_mod
+import rclipboard.uds as uds_mod
 import rclipboard.ws as ws_mod
 import rclipboard.xsel as xsel_mod
 from rclipboard.app_state import AppState
@@ -32,8 +32,9 @@ async def startup(app: FastAPI):
     # WS routes
     await ws_mod.install_module(app)
 
-    if os.environ.get("RCLIPBOARD_FIFO", "0") != "0":
-        fifo_mod.install_fifo(app)
+    # optional raw UDS
+    if os.environ.get("RCLIPBOARD_RAW_UDS_PATH", "").strip():
+        uds_mod.install_raw_uds(app)
     # optional xsel poller
     if os.environ.get("RCLIPBOARD_XSEL", "0") != "0":
         xsel_mod.install_xsel(app)
@@ -43,11 +44,11 @@ async def startup(app: FastAPI):
 
 async def shutdown(app: FastAPI):
     xsel_enabled = os.environ.get("RCLIPBOARD_XSEL", "0") != "0"
-    fifo_enabled = os.environ.get("RCLIPBOARD_FIFO", "0") != "0"
+    raw_uds_enabled = bool(os.environ.get("RCLIPBOARD_RAW_UDS_PATH", "").strip())
     async with asyncio.TaskGroup() as tg:
         tg.create_task(proxy_mod.shutdown_proxy(app))
-        if fifo_enabled:
-            tg.create_task(fifo_mod.shutdown_fifo(app))
+        if raw_uds_enabled:
+            tg.create_task(uds_mod.shutdown_raw_uds(app))
         if xsel_enabled:
             tg.create_task(xsel_mod.shutdown_xsel(app))
 

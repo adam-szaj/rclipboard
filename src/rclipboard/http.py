@@ -27,9 +27,7 @@ from .app_state import (
     enqueue_topic_data,
 )
 from .log import get_logger
-from .proxy import get_proxy_status
 from .types import Interface
-from .xsel import get_xsel_status
 
 error = (get_logger(__name__)).error
 warning = (get_logger(__name__)).warning
@@ -62,32 +60,14 @@ def install_module(app: FastAPI):
     @app.get("/v1/health.get", response_model=HealthResult)
     async def _health(request: Request):
         info(f"request from: {request.client}")
-        xsel = get_xsel_status(app)
-        proxy = get_proxy_status(app)
-        return HealthResult(
-            ok=True,
-            xsel_enabled=bool(xsel["enabled"]),
-            xsel_good=bool(xsel["good"]),
-            proxy_enabled=bool(proxy["enabled"]),
-            proxy_good=bool(proxy["good"]),
-        )
+        return app.state.main.get_health()
 
     @app.get("/status")
     @app.get("/v1/status.get", response_model=StatusResult)
     async def _get_status(request: Request):
         info(f"request from: {request.client}")
         topics = list(sorted(await enqueue_request_topics(app) or []))
-        clients = [
-            client.name for client in getattr(app.state.main, "clients", [])
-            if isinstance(client, Interface)
-        ]
-        return StatusResult(
-            ok=True,
-            topics=topics,
-            clients=clients,
-            xsel=get_xsel_status(app),
-            proxy=get_proxy_status(app),
-        )
+        return app.state.main.get_status(topics)
 
     @app.get("/topics")
     @app.post("/v1/topics.list", response_model=TopicsListResult)

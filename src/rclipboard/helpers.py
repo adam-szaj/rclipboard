@@ -1,6 +1,5 @@
 import itertools
 import os
-import stat
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from urllib.parse import urlparse
@@ -14,13 +13,6 @@ class EndpointConfig:
     host: str | None = None
     port: int | None = None
     path: str | None = None
-
-
-def _is_fifo_path(path: str) -> bool:
-    try:
-        return stat.S_ISFIFO(os.stat(path).st_mode)
-    except FileNotFoundError:
-        return path.endswith(".fifo")
 
 
 def parse_endpoint(
@@ -42,7 +34,7 @@ def parse_endpoint(
                 host=parsed.hostname or default_host,
                 port=parsed.port or default_port,
             )
-        if scheme in {"uds", "fifo"}:
+        if scheme == "uds":
             path = parsed.path or parsed.netloc
             if not path:
                 raise ValueError(f"{scheme} endpoint requires a path")
@@ -50,8 +42,7 @@ def parse_endpoint(
         raise ValueError(f"unsupported endpoint scheme: {scheme}")
 
     if raw.startswith("/"):
-        scheme = "fifo" if _is_fifo_path(raw) else "uds"
-        return EndpointConfig(scheme=scheme, path=raw)
+        return EndpointConfig(scheme="uds", path=raw)
 
     if raw.isdigit():
         return EndpointConfig(scheme="http", host=default_host, port=int(raw))
@@ -91,22 +82,6 @@ def upstream_endpoint_from_env() -> EndpointConfig:
         return EndpointConfig(scheme="uds", path=uds, host=host, port=port)
 
     return EndpointConfig(scheme="http", host=host, port=port)
-
-
-def fifo_dir_from_env() -> str | None:
-    fifo_dir = os.environ.get("RCLIPBOARD_FIFO_DIR")
-    if fifo_dir:
-        return fifo_dir
-    endpoint = os.environ.get("RCLIPBOARD_ENDPOINT")
-    if not endpoint:
-        return None
-    try:
-        parsed = parse_endpoint(endpoint)
-    except ValueError:
-        return None
-    if parsed.scheme == "fifo":
-        return parsed.path
-    return None
 
 
 def topic_data_to_clipboard_item(data: TopicData) -> ClipboardItem:

@@ -88,7 +88,6 @@ run: .venv
 run-dev: .venv
 	RCLIPBOARD_PROXY=0 \
 	RCLIPBOARD_XSEL=0 \
-	RCLIPBOARD_FIFO_DIR=runtime.d \
 	RCLIPBOARD_LOG_LEVEL=$(RCLIPBOARD_LOG_LEVEL) \
 	RCLIPBOARD_PY_LOG_LEVEL=$(RCLIPBOARD_PY_LOG_LEVEL) \
 	PYTHONPATH=src .venv/bin/python -m uvicorn rclipboard.main:app --host $(HOST) --port $(PORT) --log-level $(LOG_LEVEL) --reload
@@ -153,7 +152,6 @@ run-proxy: .venv
 	PYTHONPATH=src .venv/bin/python -m uvicorn rclipboard.main:app --host $(HOST) --port $(PORT) --log-level $(LOG_LEVEL)
 
 run-proxy-dev: .venv
-	RCLIPBOARD_FIFO_DIR=runtime-proxy.d \
 	RCLIPBOARD_PROXY=1 \
 	RCLIPBOARD_XSEL=0 \
 	RCLIPBOARD_LOG_LEVEL=$(RCLIPBOARD_LOG_LEVEL) \

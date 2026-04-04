@@ -78,21 +78,6 @@ def start_server(
     )
 
 
-def start_fifo_server(root: Path):
-    env = base_env(RCLIPBOARD_ENDPOINT=f"fifo://{root}")
-    return subprocess.Popen(
-        [
-            sys.executable,
-            "-c",
-            "import rclipboard; rclipboard.main()",
-        ],
-        cwd=ROOT_DIR,
-        env=env,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
-
-
 def stop_process(proc: subprocess.Popen) -> None:
     if proc.poll() is not None:
         return
@@ -202,19 +187,6 @@ def running_server(
         yield proc
     finally:
         stop_process(proc)
-
-
-@contextlib.contextmanager
-def running_fifo_server():
-    with tempfile.TemporaryDirectory() as tmp:
-        root = Path(tmp) / "fifo"
-        root.mkdir()
-        proc = start_fifo_server(root)
-        try:
-            wait_for_path(root / "health.json")
-            yield root, proc
-        finally:
-            stop_process(proc)
 
 
 def gen_self_signed_cert(tmp_dir: Path) -> tuple[Path, Path]:

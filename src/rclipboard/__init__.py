@@ -1,29 +1,12 @@
 import argparse
-import asyncio
-import contextlib
 import os
-import signal
 import sys
 from pathlib import Path
 
 import uvicorn
 
-from rclipboard.helpers import bind_endpoint_from_env, fifo_dir_from_env
-from rclipboard.main import create_app, shutdown, startup
-
-
-async def _run_fifo_server() -> None:
-    app = create_app()
-    stop_event = asyncio.Event()
-    loop = asyncio.get_running_loop()
-    for sig in (signal.SIGINT, signal.SIGTERM):
-        with contextlib.suppress(NotImplementedError):
-            loop.add_signal_handler(sig, stop_event.set)
-    await startup(app)
-    try:
-        await stop_event.wait()
-    finally:
-        await shutdown(app)
+from rclipboard.helpers import bind_endpoint_from_env
+from rclipboard.main import create_app
 
 
 def _run_config_cmd(argv: list[str]) -> None:
@@ -64,19 +47,11 @@ def main() -> None:
     args = parser.parse_args()
 
     endpoint = bind_endpoint_from_env()
-    fifo_dir = fifo_dir_from_env()
     ssl_certfile = os.environ.get("RCLIPBOARD_SSL_CERTFILE")
     ssl_keyfile = os.environ.get("RCLIPBOARD_SSL_KEYFILE")
     ssl_keyfile_password = os.environ.get("RCLIPBOARD_SSL_KEYFILE_PASSWORD")
     if endpoint.scheme in {"ws", "wss"}:
         raise SystemExit("websocket endpoints are not valid bind endpoints for the rclipboard server")
-    if endpoint.scheme == "fifo" and not os.environ.get("RCLIPBOARD_FIFO_DIR"):
-        asyncio.run(_run_fifo_server())
-        return
-    if endpoint.scheme == "fifo" and fifo_dir:
-        raise SystemExit(
-            "use RCLIPBOARD_FIFO_DIR alongside a TCP/HTTPS/UDS endpoint for parallel FIFO support"
-        )
     if endpoint.scheme == "https" and (not ssl_certfile or not ssl_keyfile):
         raise SystemExit(
             "https endpoint requires RCLIPBOARD_SSL_CERTFILE and RCLIPBOARD_SSL_KEYFILE"

@@ -222,9 +222,6 @@ def _make_ws_url() -> dict[str, str | bool | Path]:
             "path": endpoint.path,
             "unix": True,
         }
-    if endpoint.scheme == "fifo":
-        raise ValueError(
-            "fifo endpoints are not supported for proxy upstream connections")
     if endpoint.scheme in {"https", "wss"}:
         return {"url": f"wss://{endpoint.host}:{endpoint.port}/ws"}
     return {"url": f"ws://{endpoint.host}:{endpoint.port}/ws"}

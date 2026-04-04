@@ -159,6 +159,33 @@ class AppState:
         self.clients.remove(client)
         self._emit_runtime_state_change("clients")
 
+    def get_health(self) -> 'HealthResult':
+        from rclipboard.proxy import get_proxy_status
+        from rclipboard.xsel import get_xsel_status
+        from rclipboard.types import HealthResult
+        xsel = get_xsel_status(self.app)
+        proxy = get_proxy_status(self.app)
+        return HealthResult(
+            ok=True,
+            xsel_enabled=bool(xsel["enabled"]),
+            xsel_good=bool(xsel["good"]),
+            proxy_enabled=bool(proxy["enabled"]),
+            proxy_good=bool(proxy["good"]),
+        )
+
+    def get_status(self, topics: list[str]) -> 'StatusResult':
+        from rclipboard.proxy import get_proxy_status
+        from rclipboard.xsel import get_xsel_status
+        from rclipboard.types import Interface, StatusResult
+        clients = [c.name for c in self.clients if isinstance(c, Interface)]
+        return StatusResult(
+            ok=True,
+            topics=list(sorted(topics)),
+            clients=clients,
+            xsel=get_xsel_status(self.app),
+            proxy=get_proxy_status(self.app),
+        )
+
     def _emit_runtime_state_change(self, reason: str) -> None:
         hooks = list(getattr(self.app.state, "runtime_state_hooks", []))
         for hook in hooks:

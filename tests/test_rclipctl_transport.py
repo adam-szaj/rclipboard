@@ -20,23 +20,6 @@ class RclipctlTransportTests(unittest.TestCase):
             check=True,
         )
 
-    def test_auto_prefers_fifo_over_tcp(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            tmp_path = Path(tmp)
-            fifo_dir = tmp_path / "fifo"
-            fifo_dir.mkdir()
-            (fifo_dir / "health.json").write_text(
-                json.dumps({"ok": False, "xsel_enabled": False, "xsel_good": False})
-            )
-            env_file = tmp_path / "env"
-            env_file.write_text(
-                "RCLIPBOARD_ENDPOINT=127.0.0.1:65500\n"
-                f"RCLIPBOARD_FIFO_DIR={fifo_dir}\n"
-            )
-
-            proc = self._run_rclipctl(env_file, "health")
-            self.assertIn('"ok":false', proc.stdout.replace(" ", ""))
-
     def test_transport_flag_can_force_tcp(self):
         port = free_port()
         with tempfile.TemporaryDirectory() as tmp:

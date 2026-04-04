@@ -16,12 +16,3 @@ class EndpointConfigTests(unittest.TestCase):
         endpoint = parse_endpoint("uds:///tmp/rclipboard.sock")
         self.assertEqual(endpoint.scheme, "uds")
         self.assertEqual(endpoint.path, "/tmp/rclipboard.sock")
-
-    def test_parse_fifo_endpoint(self):
-        endpoint = parse_endpoint("fifo:///tmp/rclipboard.fifo")
-        self.assertEqual(endpoint.scheme, "fifo")
-        self.assertEqual(endpoint.path, "/tmp/rclipboard.fifo")
-
-
-if __name__ == "__main__":
-    unittest.main()
