@@ -41,18 +41,18 @@ ROOT_DIR = Path(__file__).resolve().parent.parent
 TUNEL_SCRIPT = ROOT_DIR / "scripts" / "bin" / "rcliptunel"
 _VENV_PYTHON = ROOT_DIR / ".venv" / "bin" / "python"
 
-TUNEL_TEST_IMAGE = os.environ.get(
-    "RCLIPBOARD_TUNEL_TEST_IMAGE", "rcliptunel-test:latest"
-)
+TUNEL_TEST_IMAGE = os.environ.get("RCLIPBOARD_TUNEL_TEST_IMAGE",
+                                  "rcliptunel-test:latest")
 
 # ── skip guards ───────────────────────────────────────────────────────────────
 
 
 def _cmd_ok(*args: str, timeout: int = 10) -> bool:
     try:
-        subprocess.run(
-            list(args), capture_output=True, check=True, timeout=timeout
-        )
+        subprocess.run(list(args),
+                       capture_output=True,
+                       check=True,
+                       timeout=timeout)
         return True
     except Exception:
         return False
@@ -156,8 +156,8 @@ def _wait_tcp_ready(port: int, timeout: float = 15.0) -> None:
     while time.monotonic() < deadline:
         try:
             with urllib.request.urlopen(
-                f"http://127.0.0.1:{port}/v1/health.get", timeout=2
-            ) as resp:
+                    f"http://127.0.0.1:{port}/v1/health.get",
+                    timeout=2) as resp:
                 if json.loads(resp.read()).get("ok"):
                     return
         except Exception as exc:
@@ -193,24 +193,25 @@ def _wait_uds_ready(sock_path: str, timeout: float = 15.0) -> None:
 # ── clip put helpers ──────────────────────────────────────────────────────────
 
 _CLIP_PUT_BODY = {
-    "items": [
-        {
-            "topic": "c",
-            "mime": "text/plain",
-            "encoding": "utf-8",
-            "value": "",  # filled per call
-        }
-    ],
-    "meta": {"app": "tunel-smoke"},
+    "items": [{
+        "topic": "c",
+        "mime": "text/plain",
+        "encoding": "utf-8",
+        "value": "",  # filled per call
+    }],
+    "meta": {
+        "app": "tunel-smoke"
+    },
 }
 
 
 def _put_tcp(port: int, topic: str, value: str) -> None:
     body = {
         **_CLIP_PUT_BODY,
-        "items": [
-            {**_CLIP_PUT_BODY["items"][0], "topic": topic, "value": value}
-        ],
+        "items": [{
+            **_CLIP_PUT_BODY["items"][0], "topic": topic,
+            "value": value
+        }],
     }
     data = json.dumps(body).encode()
     req = urllib.request.Request(
@@ -226,9 +227,10 @@ def _put_tcp(port: int, topic: str, value: str) -> None:
 def _put_uds(sock_path: str, topic: str, value: str) -> None:
     body = {
         **_CLIP_PUT_BODY,
-        "items": [
-            {**_CLIP_PUT_BODY["items"][0], "topic": topic, "value": value}
-        ],
+        "items": [{
+            **_CLIP_PUT_BODY["items"][0], "topic": topic,
+            "value": value
+        }],
     }
     data = json.dumps(body).encode()
     uds = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -245,8 +247,7 @@ def _put_uds(sock_path: str, topic: str, value: str) -> None:
         )
         resp = conn.getresponse()
         assert resp.status == 200, (
-            f"clip.put via UDS failed ({resp.status}): {resp.read()}"
-        )
+            f"clip.put via UDS failed ({resp.status}): {resp.read()}")
     finally:
         uds.close()
 
@@ -338,9 +339,9 @@ class _SshContainer:
             "root@127.0.0.1",
         ]
 
-    def exec_cmd(
-        self, *cmd: str, timeout: float = 10
-    ) -> subprocess.CompletedProcess:
+    def exec_cmd(self,
+                 *cmd: str,
+                 timeout: float = 10) -> subprocess.CompletedProcess:
         """Run a command inside the container via docker exec."""
         return subprocess.run(
             ["docker", "exec", self.container_id, *cmd],
@@ -405,9 +406,8 @@ class TunnelSmokeTests(unittest.TestCase):
         """Return a short UDS path inside the per-test temp dir."""
         return os.path.join(self._tmpdir, name)
 
-    def _start_tunnel(
-        self, local_spec: str, remote_spec: str
-    ) -> subprocess.Popen:
+    def _start_tunnel(self, local_spec: str,
+                      remote_spec: str) -> subprocess.Popen:
         cmd = [
             str(TUNEL_SCRIPT),
             "--local",
@@ -423,14 +423,13 @@ class TunnelSmokeTests(unittest.TestCase):
             *self.container.tunel_extra_args(),
         ]
         return self._track(
-            subprocess.Popen(
-                cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-            )
-        )
+            subprocess.Popen(cmd,
+                             stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL))
 
-    def _wait_tunnel_tcp(
-        self, remote_port: int, timeout: float = 20.0
-    ) -> None:
+    def _wait_tunnel_tcp(self,
+                         remote_port: int,
+                         timeout: float = 20.0) -> None:
         """Poll until the tunneled TCP port responds inside the container."""
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
@@ -449,12 +448,11 @@ class TunnelSmokeTests(unittest.TestCase):
                     pass
             time.sleep(0.5)
         raise RuntimeError(
-            f"Tunnel to TCP:{remote_port} not ready after {timeout}s"
-        )
+            f"Tunnel to TCP:{remote_port} not ready after {timeout}s")
 
-    def _wait_tunnel_uds(
-        self, remote_sock: str, timeout: float = 20.0
-    ) -> None:
+    def _wait_tunnel_uds(self,
+                         remote_sock: str,
+                         timeout: float = 20.0) -> None:
         """Poll until the tunneled UDS socket responds inside the container."""
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
@@ -475,8 +473,7 @@ class TunnelSmokeTests(unittest.TestCase):
                     pass
             time.sleep(0.5)
         raise RuntimeError(
-            f"Tunnel to UDS:{remote_sock} not ready after {timeout}s"
-        )
+            f"Tunnel to UDS:{remote_sock} not ready after {timeout}s")
 
     def _get_via_tcp_tunnel(self, remote_port: int, topic: str) -> str:
         """clip.get via the tunneled TCP endpoint, executed inside the container."""
@@ -493,9 +490,8 @@ class TunnelSmokeTests(unittest.TestCase):
             json.dumps({"topic": topic}),
             f"http://127.0.0.1:{remote_port}/v1/clip.get",
         )
-        self.assertEqual(
-            r.returncode, 0, f"GET via TCP tunnel failed: {r.stderr}"
-        )
+        self.assertEqual(r.returncode, 0,
+                         f"GET via TCP tunnel failed: {r.stderr}")
         return json.loads(r.stdout)["item"]["value"]
 
     def _get_via_uds_tunnel(self, remote_sock: str, topic: str) -> str:
@@ -515,9 +511,8 @@ class TunnelSmokeTests(unittest.TestCase):
             json.dumps({"topic": topic}),
             "http://localhost/v1/clip.get",
         )
-        self.assertEqual(
-            r.returncode, 0, f"GET via UDS tunnel failed: {r.stderr}"
-        )
+        self.assertEqual(r.returncode, 0,
+                         f"GET via UDS tunnel failed: {r.stderr}")
         return json.loads(r.stdout)["item"]["value"]
 
     # ── test cases ────────────────────────────────────────────────────────────
@@ -535,9 +530,8 @@ class TunnelSmokeTests(unittest.TestCase):
         self._wait_tunnel_tcp(remote_port)
 
         _put_tcp(local_port, "c", "hello-tcp-to-tcp")
-        self.assertEqual(
-            self._get_via_tcp_tunnel(remote_port, "c"), "hello-tcp-to-tcp"
-        )
+        self.assertEqual(self._get_via_tcp_tunnel(remote_port, "c"),
+                         "hello-tcp-to-tcp")
 
     def test_uds_local_to_tcp_remote(self) -> None:
         """Case 2: local UDS server → container TCP port via ssh -R (OpenSSH ≥ 6.7)."""
@@ -552,9 +546,8 @@ class TunnelSmokeTests(unittest.TestCase):
         self._wait_tunnel_tcp(remote_port)
 
         _put_uds(sock_path, "c", "hello-uds-to-tcp")
-        self.assertEqual(
-            self._get_via_tcp_tunnel(remote_port, "c"), "hello-uds-to-tcp"
-        )
+        self.assertEqual(self._get_via_tcp_tunnel(remote_port, "c"),
+                         "hello-uds-to-tcp")
 
     def test_tcp_local_to_uds_remote(self) -> None:
         """Case 3: local TCP server → container UDS socket via ssh -R (OpenSSH ≥ 6.7)."""
@@ -569,9 +562,8 @@ class TunnelSmokeTests(unittest.TestCase):
         self._wait_tunnel_uds(remote_sock)
 
         _put_tcp(local_port, "c", "hello-tcp-to-uds")
-        self.assertEqual(
-            self._get_via_uds_tunnel(remote_sock, "c"), "hello-tcp-to-uds"
-        )
+        self.assertEqual(self._get_via_uds_tunnel(remote_sock, "c"),
+                         "hello-tcp-to-uds")
 
     def test_uds_local_to_uds_remote(self) -> None:
         """Case 4: local UDS server → container UDS socket via ssh -R (OpenSSH ≥ 6.7)."""
@@ -586,9 +578,8 @@ class TunnelSmokeTests(unittest.TestCase):
         self._wait_tunnel_uds(remote_sock)
 
         _put_uds(sock_path, "c", "hello-uds-to-uds")
-        self.assertEqual(
-            self._get_via_uds_tunnel(remote_sock, "c"), "hello-uds-to-uds"
-        )
+        self.assertEqual(self._get_via_uds_tunnel(remote_sock, "c"),
+                         "hello-uds-to-uds")
 
 
 if __name__ == "__main__":

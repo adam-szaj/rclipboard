@@ -32,7 +32,8 @@ async def startup(app: FastAPI):
     # WS routes
     await ws_mod.install_module(app)
 
-    fifo_mod.install_fifo(app)
+    if os.environ.get("RCLIPBOARD_FIFO", "0") != "0":
+        fifo_mod.install_fifo(app)
     # optional xsel poller
     if os.environ.get("RCLIPBOARD_XSEL", "0") != "0":
         xsel_mod.install_xsel(app)
@@ -42,9 +43,11 @@ async def startup(app: FastAPI):
 
 async def shutdown(app: FastAPI):
     xsel_enabled = os.environ.get("RCLIPBOARD_XSEL", "0") != "0"
+    fifo_enabled = os.environ.get("RCLIPBOARD_FIFO", "0") != "0"
     async with asyncio.TaskGroup() as tg:
         tg.create_task(proxy_mod.shutdown_proxy(app))
-        tg.create_task(fifo_mod.shutdown_fifo(app))
+        if fifo_enabled:
+            tg.create_task(fifo_mod.shutdown_fifo(app))
         if xsel_enabled:
             tg.create_task(xsel_mod.shutdown_xsel(app))
 
@@ -69,7 +72,8 @@ async def lifespan(app: FastAPI):
 
 def create_app() -> FastAPI:
     app = FastAPI(title="rclipboard", version="0.1.0", lifespan=lifespan)
-    app.add_exception_handler(StarletteHTTPException, http_mod._http_exception_handler)
+    app.add_exception_handler(StarletteHTTPException,
+                              http_mod._http_exception_handler)
     return app
 
 

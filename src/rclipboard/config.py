@@ -35,22 +35,24 @@ def _bool_str(v: object) -> str:
 
 # (toml_section, toml_key, env_var_name, value_converter)
 _FIELDS: list[tuple[str, str, str, object]] = [
-    ("server", "endpoint",          "RCLIPBOARD_ENDPOINT",              str),
-    ("server", "log_level",         "RCLIPBOARD_LOG_LEVEL",             str),
-    ("server", "py_log_level",      "RCLIPBOARD_PY_LOG_LEVEL",          str),
-    ("server", "notify_delay_ms",   "RCLIPBOARD_NOTIFY_DELAY_MS",       str),
-    ("server", "xsel",              "RCLIPBOARD_XSEL",                  _bool_str),
-    ("server", "xsel_path",         "RCLIPBOARD_XSEL_PATH",             str),
-    ("server", "xsel_interval_ms",  "RCLIPBOARD_XSEL_INTERVAL_MS",      str),
-    ("server", "fifo_dir",          "RCLIPBOARD_FIFO_DIR",              str),
-    ("server", "reload",            "RCLIPBOARD_RELOAD",                _bool_str),
-    ("proxy",  "enabled",           "RCLIPBOARD_PROXY",                 _bool_str),
-    ("proxy",  "upstream_endpoint", "RCLIPBOARD_UPSTREAM_ENDPOINT",     str),
-    ("ssl",    "certfile",          "RCLIPBOARD_SSL_CERTFILE",          str),
-    ("ssl",    "keyfile",           "RCLIPBOARD_SSL_KEYFILE",           str),
-    ("ssl",    "keyfile_password",  "RCLIPBOARD_SSL_KEYFILE_PASSWORD",  str),
-    ("client", "transport",         "RCLIPCTL_TRANSPORT",               str),
-    ("client", "endpoint",          "RCLIPCTL_ENDPOINT",                str),
+    ("server", "endpoint", "RCLIPBOARD_ENDPOINT", str),
+    ("server", "log_level", "RCLIPBOARD_LOG_LEVEL", str),
+    ("server", "py_log_level", "RCLIPBOARD_PY_LOG_LEVEL", str),
+    ("server", "notify_delay_ms", "RCLIPBOARD_NOTIFY_DELAY_MS", str),
+    ("xsel", "enabled", "RCLIPBOARD_XSEL", _bool_str),
+    ("xsel", "path", "RCLIPBOARD_XSEL_PATH", str),
+    ("xsel", "interval_ms", "RCLIPBOARD_XSEL_INTERVAL_MS", str),
+    ("fifo", "enabled", "RCLIPBOARD_FIFO", _bool_str),
+    ("fifo", "mode", "RCLIPBOARD_FIFO_MODE", str),
+    ("fifo", "dir", "RCLIPBOARD_FIFO_DIR", str),
+    ("server", "reload", "RCLIPBOARD_RELOAD", _bool_str),
+    ("proxy", "enabled", "RCLIPBOARD_PROXY", _bool_str),
+    ("proxy", "upstream_endpoint", "RCLIPBOARD_UPSTREAM_ENDPOINT", str),
+    ("ssl", "certfile", "RCLIPBOARD_SSL_CERTFILE", str),
+    ("ssl", "keyfile", "RCLIPBOARD_SSL_KEYFILE", str),
+    ("ssl", "keyfile_password", "RCLIPBOARD_SSL_KEYFILE_PASSWORD", str),
+    ("client", "transport", "RCLIPCTL_TRANSPORT", str),
+    ("client", "endpoint", "RCLIPCTL_ENDPOINT", str),
 ]
 
 
@@ -114,5 +116,6 @@ def print_env(path: Path | None = None) -> None:
     for env_var, value in sorted(load_config(path).items()):
         # Escape backslashes and double-quotes; neutralise $ so the file
         # is safe to source in bash without unexpected expansion.
-        safe = value.replace("\\", "\\\\").replace('"', '\\"').replace("$", "\\$")
+        safe = value.replace("\\", "\\\\").replace('"',
+                                                   '\\"').replace("$", "\\$")
         print(f'{env_var}="{safe}"')

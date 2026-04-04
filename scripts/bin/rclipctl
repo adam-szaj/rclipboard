@@ -219,9 +219,9 @@ resolve_candidates() {
                 parse_endpoint_to_candidate ENV_TCP "$ENDPOINT" ;;
         esac
     fi
-    if [ -n "$FIFO" ]; then ENV_FIFO="$FIFO"; fi
     if [ -n "$UDS" ];  then ENV_UDS="$UDS"; fi
     if [ -z "$ENV_TCP" ]; then ENV_TCP="http://${HOST}:${PORT}"; fi
+    if [ -n "$FIFO" ]; then ENV_FIFO="$FIFO"; fi
 }
 
 select_transport() {
@@ -238,12 +238,12 @@ select_transport() {
 
     case "$TRANSPORT_SELECT" in
         auto)
-            if [ -n "$fifo_candidate" ]; then
-                TRANSPORT=fifo; FIFO_DIR="$fifo_candidate"
-            elif [ -n "$uds_candidate" ]; then
+            if [ -n "$uds_candidate" ]; then
                 TRANSPORT=uds;  UDS_PATH="$uds_candidate"
             elif [ -n "$tcp_candidate" ]; then
                 TRANSPORT=tcp;  BASE="$tcp_candidate"
+            elif [ -n "$fifo_candidate" ]; then
+                TRANSPORT=fifo; FIFO_DIR="$fifo_candidate"
             else
                 echo "no usable transport configured" >&2; exit 2
             fi ;;

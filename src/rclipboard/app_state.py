@@ -117,16 +117,17 @@ class AppState:
         self.clients: list[Interface] = []
         self.topic_content: dict[str, InternalTopicData] = {}
         self.subs: dict[str, set[Interface]] = {}
-        self.notify_delay_ms: int = int(os.environ.get("RCLIPBOARD_NOTIFY_DELAY_MS", "250"))
+        self.notify_delay_ms: int = int(
+            os.environ.get("RCLIPBOARD_NOTIFY_DELAY_MS", "250"))
         self.pending_notifications: dict[str, InternalTopicData] = {}
         self.notification_tasks: dict[str, asyncio.Task[None]] = {}
         self.notification_lock = asyncio.Lock()
         self._background_tasks: set[asyncio.Task] = set()
         self.dispatcher_task: asyncio.Task[None] = asyncio.create_task(
-            self.dispatcher(), name="dispatcher"
-        )
+            self.dispatcher(), name="dispatcher")
 
-    def subscribe_client(self, client: Interface, topics: list[str]) -> dict[str, TopicData]:
+    def subscribe_client(self, client: Interface,
+                         topics: list[str]) -> dict[str, TopicData]:
         contents: dict[str, TopicData] = dict()
         for topic in topics:
             if topic not in self.subs:
@@ -207,7 +208,8 @@ class AppState:
                 if current is asyncio.current_task():
                     self.notification_tasks.pop(topic, None)
 
-    async def _schedule_notification(self, topic_data: InternalTopicData) -> None:
+    async def _schedule_notification(self,
+                                     topic_data: InternalTopicData) -> None:
         if self.notify_delay_ms <= 0:
             await self._notify_topic_data(topic_data)
             return
@@ -215,10 +217,11 @@ class AppState:
             self.pending_notifications[topic_data.topic] = topic_data
             task = self.notification_tasks.get(topic_data.topic)
             if task is None or task.done():
-                self.notification_tasks[topic_data.topic] = (asyncio.create_task(
-                    self._delayed_notify(topic_data.topic),
-                    name=f"notify_{topic_data.topic}",
-                ))
+                self.notification_tasks[topic_data.topic] = (
+                    asyncio.create_task(
+                        self._delayed_notify(topic_data.topic),
+                        name=f"notify_{topic_data.topic}",
+                    ))
 
     async def flush_topic_notification(self, topic: str) -> None:
         async with self.notification_lock:
@@ -261,7 +264,9 @@ class AppState:
         if subject == "topic":
             assert topic
             content = self.topic_content.get(topic)
-            debug(f"found content for topic '{topic}': '{content}' from: '{self.topic_content}'")
+            debug(
+                f"found content for topic '{topic}': '{content}' from: '{self.topic_content}'"
+            )
         elif subject == "topics":
             content = list(self.topic_content.keys())
         else:
@@ -277,7 +282,8 @@ class AppState:
         self.bus.task_done()
         debug("process_queue: done")
 
-    async def enqueue_request(self, action: str, data: Any) -> TopicData | list[str] | None:
+    async def enqueue_request(self, action: str,
+                              data: Any) -> TopicData | list[str] | None:
         # warning(f"action: {action} data: {data}")
         # if not data:
         #     traceback.print_stack()
@@ -290,7 +296,8 @@ class AppState:
                 await self.bus.put(req)
                 debug("wait for future")
                 await req.future
-                internal_topic_data: InternalTopicData | None = (req.future.result())
+                internal_topic_data: InternalTopicData | None = (
+                    req.future.result())
                 if internal_topic_data:
                     return internal_topic_data.data
             if action.endswith(":topics"):
@@ -309,7 +316,8 @@ class AppState:
         await self.bus.put_nowait(SetTopicData(data, None))
 
 
-def subscribe_client(app: FastAPI, client: Interface, topics: list[str]) -> dict[str, TopicData]:
+def subscribe_client(app: FastAPI, client: Interface,
+                     topics: list[str]) -> dict[str, TopicData]:
     assert isinstance(app.state.main, AppState)
     main: AppState = app.state.main
     return main.subscribe_client(client, topics)
@@ -360,7 +368,8 @@ async def enqueue_topic_data(app: FastAPI, data: TopicData,
     return internal_topic_data
 
 
-async def enqueue_topic_data_nowait(app: FastAPI, data: TopicData, source: Interface | None):
+async def enqueue_topic_data_nowait(app: FastAPI, data: TopicData,
+                                    source: Interface | None):
     internal_topic_data = InternalTopicData(data=data, source=source)
     await app.state.main.enqueue_topic_data_nowait(internal_topic_data)
     return internal_topic_data

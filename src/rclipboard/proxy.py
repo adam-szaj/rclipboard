@@ -6,11 +6,11 @@ import json
 import os
 import ssl
 from logging import Logger
-from typing import Any, override
 from pathlib import Path
+from typing import Any, override
 
-from pydantic import JsonValue
 from fastapi import FastAPI
+from pydantic import JsonValue
 from websockets.asyncio.client import connect, unix_connect
 
 from rclipboard.app_state import (
@@ -27,7 +27,12 @@ from rclipboard.helpers import (
     upstream_endpoint_from_env,
 )
 from rclipboard.log import get_logger
-from rclipboard.types import ClipboardItem, TopicData, ClipWatchResult, BidirectionalInterface
+from rclipboard.types import (
+    BidirectionalInterface,
+    ClipboardItem,
+    ClipWatchResult,
+    TopicData,
+)
 
 logger: Logger = get_logger(__name__)
 error = logger.error
@@ -98,7 +103,9 @@ class ProxyClient(BidirectionalInterface):
             },
         })
 
-    async def send_clip(self, item: ClipboardItem, meta: dict[str, JsonValue] | None = None):
+    async def send_clip(self,
+                        item: ClipboardItem,
+                        meta: dict[str, JsonValue] | None = None):
         if not self.connected:
             return
         await self._send_json({
@@ -115,7 +122,8 @@ class ProxyClient(BidirectionalInterface):
         message_id = message.get("id")
         if message_id == self._watch_id:
             if "error" in message:
-                warning(f"proxy watch rejected by upstream: {message['error']}")
+                warning(
+                    f"proxy watch rejected by upstream: {message['error']}")
             else:
                 info(f"proxy subscribed upstream topics: {self.topics}")
                 result = ClipWatchResult.model_validate(message.get("result"))
@@ -152,7 +160,8 @@ class ProxyClient(BidirectionalInterface):
             ws_cm = unix_connect(path=str(self.path), uri=self.url)
         else:
             ssl_ctx = _make_upstream_ssl_ctx()
-            ws_cm = connect(self.url, ssl=ssl_ctx) if ssl_ctx is not None else connect(self.url)
+            ws_cm = (connect(self.url, ssl=ssl_ctx)
+                     if ssl_ctx is not None else connect(self.url))
 
         async with ws_cm as ws:
             self.ws = ws
@@ -214,7 +223,8 @@ def _make_ws_url() -> dict[str, str | bool | Path]:
             "unix": True,
         }
     if endpoint.scheme == "fifo":
-        raise ValueError("fifo endpoints are not supported for proxy upstream connections")
+        raise ValueError(
+            "fifo endpoints are not supported for proxy upstream connections")
     if endpoint.scheme in {"https", "wss"}:
         return {"url": f"wss://{endpoint.host}:{endpoint.port}/ws"}
     return {"url": f"ws://{endpoint.host}:{endpoint.port}/ws"}

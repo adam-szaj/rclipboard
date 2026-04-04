@@ -7,10 +7,11 @@ from typing import Annotated, Literal, override
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator
 
-_TOPIC_RE = re.compile(r'^[a-zA-Z0-9_-]{1,64}$')
+_TOPIC_RE = re.compile(r"^[a-zA-Z0-9_-]{1,64}$")
 
 
 class Interface(ABC):
+
     def __init__(self):
         pass
 
@@ -28,6 +29,7 @@ _logger = logging.getLogger(__name__)
 
 
 class BidirectionalInterface(Interface):
+
     def __init__(self):
         super().__init__()
         self.topics: set[str] = set()
@@ -51,13 +53,15 @@ class BidirectionalInterface(Interface):
                 except a.CancelledError:
                     raise
                 except Exception as exc:
-                    _logger.error("send to %s failed: %s", self.name, exc, exc_info=True)
+                    _logger.error("send to %s failed: %s",
+                                  self.name,
+                                  exc,
+                                  exc_info=True)
 
     def start_drainer(self) -> None:
         if self._drainer_task is None or self._drainer_task.done():
-            self._drainer_task = a.create_task(
-                self._run_drainer(), name=f"drainer_{self.name}"
-            )
+            self._drainer_task = a.create_task(self._run_drainer(),
+                                               name=f"drainer_{self.name}")
 
     async def stop_drainer(self) -> None:
         if self._drainer_task:
@@ -74,9 +78,8 @@ class BidirectionalInterface(Interface):
 class ValueData(BaseModel):
     value: str
     value_type: Literal["text", "binary"] = Field(alias="type", default="text")
-    value_encoding: Literal["plain", "hex", "base64"] = Field(
-        alias="encoding", default="plain"
-    )
+    value_encoding: Literal["plain", "hex", "base64"] = Field(alias="encoding",
+                                                              default="plain")
 
 
 class TopicData(BaseModel):
@@ -86,11 +89,12 @@ class TopicData(BaseModel):
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
-    @field_validator('topic')
+    @field_validator("topic")
     @classmethod
     def validate_topic(cls, v: str) -> str:
         if not _TOPIC_RE.match(v):
-            raise ValueError(f"invalid topic name: {v!r} (must match {_TOPIC_RE.pattern})")
+            raise ValueError(
+                f"invalid topic name: {v!r} (must match {_TOPIC_RE.pattern})")
         return v
 
 
@@ -107,11 +111,12 @@ class ClipboardItem(BaseModel):
     size: int | None = None
     digest: DigestInfo | None = None
 
-    @field_validator('topic')
+    @field_validator("topic")
     @classmethod
     def validate_topic(cls, v: str) -> str:
         if not _TOPIC_RE.match(v):
-            raise ValueError(f"invalid topic name: {v!r} (must match {_TOPIC_RE.pattern})")
+            raise ValueError(
+                f"invalid topic name: {v!r} (must match {_TOPIC_RE.pattern})")
         return v
 
 
@@ -172,6 +177,7 @@ class StatusResult(BaseModel):
 
 
 class InternalTopicData(ABC):
+
     def __init__(self, data: TopicData, source: Interface | None):
         self.data: TopicData = data
         self.source: Interface | None = source

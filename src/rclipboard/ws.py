@@ -17,6 +17,7 @@ from .app_state import (
 )
 from .helpers import clipboard_item_to_topic_data, topic_data_to_clipboard_item
 from .log import get_logger as gl
+from .proxy import get_proxy_status
 from .types import (
     BidirectionalInterface,
     ClipboardItem,
@@ -35,7 +36,6 @@ from .types import (
     TopicsListResult,
 )
 from .xsel import get_xsel_status
-from .proxy import get_proxy_status
 
 logger = gl(__name__)
 error = logger.error
@@ -46,6 +46,7 @@ trace = logger.debug
 
 
 class WSServerConnection(BidirectionalInterface):
+
     def __init__(self, app: FastAPI, ws: WebSocket):
         super().__init__()
         self.app: FastAPI = app
@@ -61,51 +62,48 @@ class WSServerConnection(BidirectionalInterface):
         await self._send_event(
             "clip.changed",
             {
-                "items": [
-                    _topic_data_to_clipboard_item(data).model_dump(mode="json")
-                ],
-                "meta": data.meta,
+                "items":
+                [_topic_data_to_clipboard_item(data).model_dump(mode="json")],
+                "meta":
+                data.meta,
             },
         )
 
-    async def _send_result(
-        self, request_id: int | str | None, result: JsonValue
-    ) -> None:
+    async def _send_result(self, request_id: int | str | None,
+                           result: JsonValue) -> None:
         if request_id is None:
             return
         await self.ws.send_json(
             JSONRPCResponseMessage(
-                **{"id": request_id},
+                **{
+                    "id": request_id
+                },
                 jsonrpc="2.0",
                 result=result,
-            ).model_dump(by_alias=True, mode="json", exclude_none=True)
-        )
+            ).model_dump(by_alias=True, mode="json", exclude_none=True))
 
-    async def _send_error(
-        self, request_id: int | str | None, rpc_error: RPCError
-    ) -> None:
+    async def _send_error(self, request_id: int | str | None,
+                          rpc_error: RPCError) -> None:
         if request_id is None:
             return
         await self.ws.send_json(
             JSONRPCResponseMessage(
-                **{"id": request_id},
+                **{
+                    "id": request_id
+                },
                 jsonrpc="2.0",
                 error=rpc_error,
-            ).model_dump(by_alias=True, mode="json", exclude_none=True)
-        )
+            ).model_dump(by_alias=True, mode="json", exclude_none=True))
 
     async def _send_event(self, method: str, params: object) -> None:
-        await self.ws.send_json(
-            {
-                "jsonrpc": "2.0",
-                "method": method,
-                "params": params,
-            }
-        )
+        await self.ws.send_json({
+            "jsonrpc": "2.0",
+            "method": method,
+            "params": params,
+        })
 
     async def _handle_clip_put(
-        self, request: JSONRPCRequestMessage
-    ) -> ClipPutResult:
+            self, request: JSONRPCRequestMessage) -> ClipPutResult:
         params = ClipPutParams.model_validate(request.params or {})
         items: list[ClipboardItem] = []
         for item in params.items:
@@ -115,19 +113,16 @@ class WSServerConnection(BidirectionalInterface):
         return ClipPutResult(items=items)
 
     async def _handle_clip_get(
-        self, request: JSONRPCRequestMessage
-    ) -> ClipGetResult:
+            self, request: JSONRPCRequestMessage) -> ClipGetResult:
         params = ClipGetParams.model_validate(request.params or {})
         content = await enqueue_request_topic(self.app, params.topic)
         if content is None:
-            raise RPCMethodError(
-                1001, "Topic not found", {"topic": params.topic}
-            )
+            raise RPCMethodError(1001, "Topic not found",
+                                 {"topic": params.topic})
         return ClipGetResult(item=_topic_data_to_clipboard_item(content))
 
     async def _handle_clip_watch(
-        self, request: JSONRPCRequestMessage
-    ) -> ClipWatchResult:
+            self, request: JSONRPCRequestMessage) -> ClipWatchResult:
         params = ClipWatchParams.model_validate(request.params or {})
         new_topics = [
             topic for topic in params.topics if topic not in self.topics
@@ -139,8 +134,7 @@ class WSServerConnection(BidirectionalInterface):
         return ClipWatchResult(topics=list(self.topics), contents=contents)
 
     async def _handle_clip_unwatch(
-        self, request: JSONRPCRequestMessage
-    ) -> ClipWatchResult:
+            self, request: JSONRPCRequestMessage) -> ClipWatchResult:
         params = ClipWatchParams.model_validate(request.params or {})
         remove_topics = [
             topic for topic in params.topics if topic in self.topics
@@ -151,21 +145,19 @@ class WSServerConnection(BidirectionalInterface):
         return ClipWatchResult(topics=list(self.topics))
 
     async def _handle_topics_list(
-        self, _request: JSONRPCRequestMessage
-    ) -> TopicsListResult:
+            self, _request: JSONRPCRequestMessage) -> TopicsListResult:
         topics = await enqueue_request_topics(self.app) or []
         return TopicsListResult(topics=list(sorted(topics)))
 
     async def _handle_status_get(
-        self, _request: JSONRPCRequestMessage
-    ) -> StatusResult:
+            self, _request: JSONRPCRequestMessage) -> StatusResult:
         topics = await enqueue_request_topics(self.app) or []
         clients = [
             client.name
             for client in getattr(self.app.state.main, "clients", [])
             if hasattr(client, "name")
         ]
-        proxy=get_proxy_status(self.app)
+        proxy = get_proxy_status(self.app)
         return StatusResult(
             ok=True,
             topics=list(sorted(topics)),
@@ -175,8 +167,7 @@ class WSServerConnection(BidirectionalInterface):
         )
 
     async def _handle_health_get(
-        self, _request: JSONRPCRequestMessage
-    ) -> HealthResult:
+            self, _request: JSONRPCRequestMessage) -> HealthResult:
         xsel = get_xsel_status(self.app)
         proxy = get_proxy_status(self.app)
         return HealthResult(
@@ -251,8 +242,7 @@ class WSServerConnection(BidirectionalInterface):
                     continue
                 try:
                     request = JSONRPCRequestMessage.model_validate(
-                        json_message
-                    )
+                        json_message)
                 except ValidationError as exc:
                     request_id = json_message.get("id")
                     await self._send_error(
@@ -276,6 +266,7 @@ class WSServerConnection(BidirectionalInterface):
 
 
 class RPCMethodError(Exception):
+
     def __init__(self, code: int, message: str, data: object | None = None):
         super().__init__(message)
         self.code = code
@@ -288,6 +279,7 @@ _clipboard_item_to_topic_data = clipboard_item_to_topic_data
 
 
 async def install_module(app: FastAPI) -> None:
+
     @app.websocket("/ws")
     async def ws_endpoint(ws: WebSocket):
         conn = WSServerConnection(app, ws)

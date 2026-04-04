@@ -39,19 +39,20 @@ trace = (get_logger(__name__)).debug
 if hasattr(get_logger(__name__), "trace"):
     trace = getattr(get_logger(__name__), "trace")
 
-
 _topic_data_to_clipboard_item = topic_data_to_clipboard_item
 _clipboard_item_to_topic_data = clipboard_item_to_topic_data
 
 
-async def _http_exception_handler(
-    _request: Request, exc: StarletteHTTPException
-):
+async def _http_exception_handler(_request: Request,
+                                  exc: StarletteHTTPException):
     if isinstance(exc.detail, dict) and {"code", "message"} <= set(exc.detail):
         return JSONResponse(status_code=exc.status_code, content=exc.detail)
     return JSONResponse(
         status_code=exc.status_code,
-        content={"code": exc.status_code, "message": str(exc.detail)},
+        content={
+            "code": exc.status_code,
+            "message": str(exc.detail)
+        },
     )
 
 
@@ -77,8 +78,7 @@ def install_module(app: FastAPI):
         info(f"request from: {request.client}")
         topics = list(sorted(await enqueue_request_topics(app) or []))
         clients = [
-            client.name
-            for client in getattr(app.state.main, "clients", [])
+            client.name for client in getattr(app.state.main, "clients", [])
             if isinstance(client, Interface)
         ]
         return StatusResult(
@@ -92,13 +92,12 @@ def install_module(app: FastAPI):
     @app.get("/topics")
     @app.post("/v1/topics.list", response_model=TopicsListResult)
     async def _get_topics(
-        request: Request, body: TopicsListParams | None = None
-    ) -> TopicsListResult:
+            request: Request,
+            body: TopicsListParams | None = None) -> TopicsListResult:
         info(f"request from: {request.client}")
         _ = body
         return TopicsListResult(
-            topics=list(sorted(await enqueue_request_topics(app) or []))
-        )
+            topics=list(sorted(await enqueue_request_topics(app) or [])))
 
     @app.get("/v1/clip/{topic}", response_model=TopicData)
     async def _get_clip(topic: str, request: Request) -> TopicData:
@@ -109,29 +108,28 @@ def install_module(app: FastAPI):
         return content
 
     @app.post("/v1/clip.get", response_model=ClipGetResult)
-    async def _post_get_clip(
-        body: ClipGetParams, request: Request
-    ) -> ClipGetResult:
+    async def _post_get_clip(body: ClipGetParams,
+                             request: Request) -> ClipGetResult:
         info(f"request from: {request.client} headers: {request.headers}")
 
         content: TopicData | None = await enqueue_request_topic(
-            app, body.topic
-        )
+            app, body.topic)
         if content is None:
             raise HTTPException(
                 status_code=404,
                 detail={
                     "code": 1001,
                     "message": "Topic not found",
-                    "data": {"topic": body.topic},
+                    "data": {
+                        "topic": body.topic
+                    },
                 },
             )
         return ClipGetResult(item=_topic_data_to_clipboard_item(content))
 
     @app.post("/v1/clip.put", response_model=ClipPutResult)
-    async def _post_clip_put(
-        body: ClipPutParams, request: Request
-    ) -> ClipPutResult:
+    async def _post_clip_put(body: ClipPutParams,
+                             request: Request) -> ClipPutResult:
         info(f"request from: {request.client} headers: {request.headers}")
         items: list[ClipboardItem] = []
         for item in body.items:
