@@ -59,6 +59,7 @@ class RPCHandler(BidirectionalInterface):
         BidirectionalInterface.__init__(self)
         self.app = app
         self.topics: set[str] = set()
+        self.public_key: str | None = None
 
     @property
     @abstractmethod
@@ -108,11 +109,17 @@ class RPCHandler(BidirectionalInterface):
         if content is None:
             raise RPCMethodError(1001, "Topic not found",
                                  {"topic": params.topic})
+        if content.meta.get("encrypted") is True:
+            pub_key = self.public_key
+            if not pub_key or pub_key not in self.app.state.main.public_keys:
+                raise RPCMethodError(4032, "Not registered")
         return ClipGetResult(item=_topic_data_to_clipboard_item(content))
 
     async def _handle_clip_watch(
             self, request: JSONRPCRequestMessage) -> ClipWatchResult:
         params = ClipWatchParams.model_validate(request.params or {})
+        if params.public_key:
+            self.public_key = params.public_key
         new_topics = [
             topic for topic in params.topics if topic not in self.topics
         ]

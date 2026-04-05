@@ -108,6 +108,7 @@ class ClipboardItem(BaseModel):
     value: JsonValue
     mime: str = "application/octet-stream"
     encoding: Literal["utf-8", "base64", "json"] = "base64"
+    encrypted: bool = False
     size: int | None = None
     digest: DigestInfo | None = None
 
@@ -118,6 +119,26 @@ class ClipboardItem(BaseModel):
             raise ValueError(
                 f"invalid topic name: {v!r} (must match {_TOPIC_RE.pattern})")
         return v
+
+
+class KeyPublishParams(BaseModel):
+    public_key: str
+    label: str = ""
+
+
+class KeyPublishResult(BaseModel):
+    ok: bool
+    key_id: str
+
+
+class KeyEntry(BaseModel):
+    key_id: str
+    public_key: str
+    label: str
+
+
+class KeysListResult(BaseModel):
+    keys: list[KeyEntry]
 
 
 class RPCError(BaseModel):
@@ -145,6 +166,7 @@ class ClipGetResult(BaseModel):
 
 class ClipWatchParams(BaseModel):
     topics: list[str]
+    public_key: str | None = None
 
 
 class ClipWatchResult(BaseModel):

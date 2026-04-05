@@ -32,6 +32,12 @@ XSEL_ENABLED: bool = os.environ.get("RCLIPBOARD_XSEL", "0") not in (
     "false",
     "False",
 )
+XSEL_ENCRYPT: bool = os.environ.get("RCLIPBOARD_XSEL_ENCRYPT", "0") not in (
+    "0",
+    "false",
+    "False",
+)
+RCLIPCTL_PATH: Path = Path(os.environ.get("RCLIPCTL_PATH", "rclipctl"))
 
 POLL_INTERVAL_MS: int = int(
     os.environ.get("RCLIPBOARD_XSEL_INTERVAL_MS", "500"))
@@ -100,7 +106,15 @@ async def read_selection(opt: str, timeout: float) -> bytes:
     if not os.environ.get("DISPLAY"):
         trace("xsel read_selection skipped: no DISPLAY")
         return b""
-    code, out, _ = await _exec(XSEL_PATH, opt, "-o", timeout=timeout)
+    if XSEL_ENCRYPT:
+        code, out, _ = await _exec(
+            RCLIPCTL_PATH,
+            "exec", "--encrypt-output", "--fetch-keys",
+            "--", str(XSEL_PATH), opt, "-o",
+            timeout=timeout,
+        )
+    else:
+        code, out, _ = await _exec(XSEL_PATH, opt, "-o", timeout=timeout)
     if code != 0:
         return b""
     return out
@@ -166,6 +180,7 @@ class XselInterface(BidirectionalInterface):
             "enabled": self.enabled,
             "good": self.good,
             "path": str(XSEL_PATH),
+            "encrypt": XSEL_ENCRYPT,
             "display": os.environ.get("DISPLAY", ""),
             "interval_ms": POLL_INTERVAL_MS,
             "topics": list(sorted(self.selection_states.keys())),
@@ -192,7 +207,18 @@ class XselInterface(BidirectionalInterface):
             assert isinstance(value, str)
             data_bytes = value.encode()
 
-        await write_selection(opt, data_bytes, timeout=2.5)
+        encrypted = item.meta.get("encrypted", False) is True
+        if XSEL_ENCRYPT and encrypted:
+            # data_bytes is raw age ciphertext; decrypt via rclipctl exec --decrypt-input
+            await _exec(
+                RCLIPCTL_PATH,
+                "exec", "--decrypt-input",
+                "--", str(XSEL_PATH), "-n", "-i", opt,
+                input_data=data_bytes,
+                timeout=2.5,
+            )
+        else:
+            await write_selection(opt, data_bytes, timeout=2.5)
 
         # remember last applied and seen
         ts = utc_timestamp()
@@ -227,6 +253,9 @@ class XselInterface(BidirectionalInterface):
         if current == state.applied:
             return
 
+        meta: dict = {"app": "xsel"}
+        if XSEL_ENCRYPT:
+            meta["encrypted"] = True
         await enqueue_topic_data(
             self.app,
             TopicData(
@@ -234,7 +263,7 @@ class XselInterface(BidirectionalInterface):
                 value=ValueData(value=_b64(current),
                                 type="binary",
                                 encoding="base64"),
-                meta={"app": "xsel"},
+                meta=meta,
             ),
             source=self,
         )

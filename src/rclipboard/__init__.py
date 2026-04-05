@@ -59,7 +59,7 @@ def main() -> None:
 
     config = uvicorn.Config(
         app="rclipboard.main:app",
-        host="" if endpoint.scheme == "uds" or args.fd is not None else endpoint.host,
+        host="" if endpoint.scheme == "uds" or args.fd is not None else endpoint.host or "127.0.0.1",
         port=0 if endpoint.scheme == "uds" or args.fd is not None else int(endpoint.port or 0),
         uds=endpoint.path if endpoint.scheme == "uds" else None,
         fd=args.fd,

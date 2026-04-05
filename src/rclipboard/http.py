@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import hashlib
+import os
+
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
@@ -15,6 +18,10 @@ from rclipboard.types import (
     ClipPutParams,
     ClipPutResult,
     HealthResult,
+    KeyEntry,
+    KeyPublishParams,
+    KeyPublishResult,
+    KeysListResult,
     StatusResult,
     TopicData,
     TopicsListParams,
@@ -105,7 +112,45 @@ def install_module(app: FastAPI):
                     },
                 },
             )
-        return ClipGetResult(item=_topic_data_to_clipboard_item(content))
+        item = _topic_data_to_clipboard_item(content)
+        if item.encrypted:
+            pub_key = request.headers.get("x-age-public-key", "")
+            if not pub_key or pub_key not in app.state.main.public_keys:
+                raise HTTPException(
+                    status_code=403,
+                    detail={"code": 4032, "message": "Not registered"},
+                )
+        return ClipGetResult(item=item)
+
+    @app.post("/v1/keys.publish", response_model=KeyPublishResult)
+    async def _keys_publish(body: KeyPublishParams,
+                            request: Request) -> KeyPublishResult:
+        info(f"request from: {request.client}")
+        token = os.environ.get("RCLIPBOARD_ADMIN_TOKEN", "")
+        if not token:
+            raise HTTPException(
+                status_code=503,
+                detail={"code": 5031, "message": "Key registry not enabled"},
+            )
+        auth = request.headers.get("authorization", "")
+        if auth != f"Bearer {token}":
+            raise HTTPException(
+                status_code=403,
+                detail={"code": 4031, "message": "Forbidden"},
+            )
+        key_id = hashlib.sha256(body.public_key.encode()).hexdigest()[:16]
+        app.state.main.public_keys[body.public_key] = {
+            "public_key": body.public_key,
+            "label": body.label,
+            "key_id": key_id,
+        }
+        return KeyPublishResult(ok=True, key_id=key_id)
+
+    @app.get("/v1/keys.list", response_model=KeysListResult)
+    async def _keys_list(request: Request) -> KeysListResult:
+        info(f"request from: {request.client}")
+        entries = [KeyEntry(**v) for v in app.state.main.public_keys.values()]
+        return KeysListResult(keys=entries)
 
     @app.post("/v1/clip.put", response_model=ClipPutResult)
     async def _post_clip_put(body: ClipPutParams,

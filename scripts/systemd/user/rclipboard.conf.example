@@ -21,6 +21,10 @@
     py_log_level = "WARNING"   # Python logging level
     notify_delay_ms = 500   # clipboard notification debounce (ms)
 
+    # Admin token for key registry (POST /v1/keys.publish).
+    # Leave empty to disable key registration.
+    # admin_token = ""
+
 # Parallel FIFO directory (active alongside HTTP/WS server when set)
 [fifo]
     enabled = true
@@ -33,6 +37,10 @@
     enabled      = true
     path         = "/usr/bin/xsel"
     interval_ms  = 250
+    # Encrypt clipboard data captured from X11 via rclipctl exec.
+    # Requires age and rclipctl on PATH, and at least one registered public key.
+    # Default: false (disabled)
+    encrypt      = false
 
 [proxy]
     # Enable proxy mode: connect to an upstream server and replicate topics locally.

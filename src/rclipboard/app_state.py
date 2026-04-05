@@ -122,6 +122,7 @@ class AppState:
         self.pending_notifications: dict[str, InternalTopicData] = {}
         self.notification_tasks: dict[str, asyncio.Task[None]] = {}
         self.notification_lock = asyncio.Lock()
+        self.public_keys: dict[str, dict] = {}  # age1pubkey → {public_key, label, key_id}
         self._background_tasks: set[asyncio.Task] = set()
         self.dispatcher_task: asyncio.Task[None] = asyncio.create_task(
             self.dispatcher(), name="dispatcher")
@@ -214,10 +215,15 @@ class AppState:
         if not subs:
             return
         source = topic_data.source
+        encrypted = topic_data.data.meta.get("encrypted") is True
         for conn in subs:
             if isinstance(conn, BidirectionalInterface):
                 if source and conn is source:
                     continue
+                if encrypted:
+                    pub_key = getattr(conn, "public_key", None)
+                    if not pub_key or pub_key not in self.public_keys:
+                        continue
                 conn.deliver(topic_data.data)
 
     async def _notify_topic_data(self, topic_data: InternalTopicData) -> None:

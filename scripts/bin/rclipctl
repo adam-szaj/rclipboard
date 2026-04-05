@@ -3,18 +3,150 @@
 set -euo pipefail
 
 if [ $# -lt 1 ]; then
-    echo "usage: $0 <put|get|status|topics|health> [options]" >&2
+    echo "usage: $0 <put|get|exec|keygen|register|keys-list|status|topics|health> [options]" >&2
     exit 1
 fi
 
 cmd="$1"; shift
+
+RCLIP_CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/rclipboard"
+
+# ── keygen (local-only, no transport needed) ─────────────────────────────────
+if [ "$cmd" = "keygen" ]; then
+    key_file="$RCLIP_CONFIG_DIR/age_key.txt"
+    pub_file="$RCLIP_CONFIG_DIR/age_key.pub"
+
+    if [ -f "$key_file" ]; then
+        echo "Key already exists at $key_file"
+        echo "Public key: $(cat "$pub_file")"
+        exit 0
+    fi
+
+    if ! command -v age-keygen >/dev/null 2>&1; then
+        echo "error: age-keygen not found in PATH" >&2
+        echo "Install age: https://github.com/FiloSottile/age#installation" >&2
+        exit 1
+    fi
+
+    mkdir -p "$RCLIP_CONFIG_DIR"
+    age-keygen -o "$key_file" 2>/dev/null
+    chmod 600 "$key_file"
+    grep '^# public key:' "$key_file" | awk '{print $NF}' > "$pub_file"
+    echo "Generated key: $key_file"
+    echo "Public key: $(cat "$pub_file")"
+    exit 0
+fi
+
+# ── exec (local-only, no transport needed) ───────────────────────────────────
+if [ "$cmd" = "exec" ]; then
+    exec_encrypt_output=0
+    exec_decrypt_input=0
+    exec_rclip_args=()
+    exec_wrapped=()
+    past_sep=0
+
+    for _a in "$@"; do
+        if   [ "$past_sep" = 1 ];              then exec_wrapped+=("$_a")
+        elif [ "$_a" = "--" ];                  then past_sep=1
+        elif [ "$_a" = "--encrypt-output" ];    then exec_encrypt_output=1
+        elif [ "$_a" = "--decrypt-input" ];     then exec_decrypt_input=1
+        else                                        exec_rclip_args+=("$_a")
+        fi
+    done
+    unset _a
+
+    [ ${#exec_wrapped[@]} -eq 0 ] && { echo "error: exec requires -- <command>" >&2; exit 1; }
+    if [ "$exec_encrypt_output" = 0 ] && [ "$exec_decrypt_input" = 0 ]; then
+        echo "error: exec requires --encrypt-output or --decrypt-input" >&2; exit 1
+    fi
+    if [ "$exec_encrypt_output" = 1 ] && [ "$exec_decrypt_input" = 1 ]; then
+        echo "error: --encrypt-output and --decrypt-input are mutually exclusive" >&2; exit 1
+    fi
+
+    # These are needed by build_age_recipients / require_age / encrypt_value
+    EXTRA_KEYS=()
+    KNOWN_KEYS_FILE="${RCLIPBOARD_KNOWN_KEYS_FILE:-$RCLIP_CONFIG_DIR/known_keys}"
+    AGE_KEY_FILE="${RCLIPBOARD_AGE_KEY_FILE:-$RCLIP_CONFIG_DIR/age_key.txt}"
+    fetch_keys=0
+
+    if [ "$exec_encrypt_output" = 1 ]; then
+        # Parse encryption options from args before --
+        set -- "${exec_rclip_args[@]+"${exec_rclip_args[@]}"}"
+        _exec_args=$(getopt -o "" -l "key:,key-file:,fetch-keys,config:" -- "$@") || exit 2
+        eval set -- "$_exec_args"
+        while true; do
+            case "$1" in
+                --key)        EXTRA_KEYS+=("$2"); shift 2 ;;
+                --key-file)   KNOWN_KEYS_FILE="$2"; shift 2 ;;
+                --fetch-keys) fetch_keys=1; shift ;;
+                --config)     shift 2 ;;
+                --)           shift; break ;;
+                *)            break ;;
+            esac
+        done
+
+        require_age() {
+            command -v age >/dev/null 2>&1 && return
+            echo "error: age not found in PATH" >&2
+            echo "Install age: https://github.com/FiloSottile/age#installation" >&2
+            exit 1
+        }
+        build_age_recipients() {
+            local recipients=()
+            for k in "${EXTRA_KEYS[@]}"; do
+                recipients+=(-r "$k")
+            done
+            if [ -r "$KNOWN_KEYS_FILE" ]; then
+                while IFS= read -r line; do
+                    line="${line%%#*}"; line="${line// /}"
+                    [ -n "$line" ] && recipients+=(-r "$line")
+                done < "$KNOWN_KEYS_FILE"
+            fi
+            if [ "$fetch_keys" = "1" ] && [ -n "${BASE:-}" ]; then
+                local server_keys
+                server_keys=$(curl "${CURL_SOCK_OPTS[@]:-}" -fsS "${BASE}/v1/keys.list" 2>/dev/null \
+                    | jq -r '.keys[].public_key' 2>/dev/null) || true
+                while IFS= read -r k; do
+                    [ -n "$k" ] && recipients+=(-r "$k")
+                done <<< "$server_keys"
+            fi
+            if [ ${#recipients[@]} -eq 0 ]; then
+                echo "error: --encrypt-output requires recipients via --key, $KNOWN_KEYS_FILE, or --fetch-keys" >&2
+                exit 1
+            fi
+            printf '%s\n' "${recipients[@]}"
+        }
+
+        require_age
+        raw_output=$("${exec_wrapped[@]}") || { ec=$?; exit $ec; }
+        [ -z "$raw_output" ] && exit 0
+        mapfile -t _recipients < <(build_age_recipients)
+        printf '%s' "$raw_output" | age "${_recipients[@]}" | base64 -w 0
+        exit $?
+    fi
+
+    if [ "$exec_decrypt_input" = 1 ]; then
+        require_age() {
+            command -v age >/dev/null 2>&1 && return
+            echo "error: age not found in PATH" >&2
+            echo "Install age: https://github.com/FiloSottile/age#installation" >&2
+            exit 1
+        }
+        require_age
+        if [ ! -r "$AGE_KEY_FILE" ]; then
+            echo "error: no key at $AGE_KEY_FILE — run: rclipctl keygen" >&2; exit 1
+        fi
+        base64 -d | age --decrypt -i "$AGE_KEY_FILE" | "${exec_wrapped[@]}"
+        exit $?
+    fi
+fi
 
 # ── locate rclipboard binary ─────────────────────────────────────────────────
 find_rclipboard() {
     if command -v rclipboard >/dev/null 2>&1; then
         echo "rclipboard"; return
     fi
-    local venv_bin="$HOME/.config/rclipboard/venv/bin/rclipboard"
+    local venv_bin="$RCLIP_CONFIG_DIR/venv/bin/rclipboard"
     if [ -x "$venv_bin" ]; then
         echo "$venv_bin"; return
     fi
@@ -39,6 +171,13 @@ json=0
 topic=c
 encoding=""
 mode="$cmd"
+encrypt=0
+fetch_keys=0
+EXTRA_KEYS=()
+KNOWN_KEYS_FILE="${RCLIPBOARD_KNOWN_KEYS_FILE:-$RCLIP_CONFIG_DIR/known_keys}"
+AGE_KEY_FILE="${RCLIPBOARD_AGE_KEY_FILE:-$RCLIP_CONFIG_DIR/age_key.txt}"
+REGISTER_TOKEN="${RCLIPBOARD_ADMIN_TOKEN:-}"
+REGISTER_LABEL=""
 
 HOST=127.0.0.1
 PORT=8989
@@ -51,12 +190,24 @@ CLI_CONFIGURED=0
 usage() {
     cat << EOS
 Subcommands:
-  put [options]     read stdin and call clip.put
-  get [options]     call clip.get
-  clip [options]    alias for put
-  status [options]  server status
-  topics [options]  list topics
-  health [options]  server health
+  put [options]            read stdin and call clip.put
+  get [options]            call clip.get
+  clip [options]           alias for put
+  exec --encrypt-output [enc-opts] -- <cmd>  run cmd, encrypt stdout, print to stdout
+  exec --decrypt-input -- <cmd>              decrypt stdin, pipe plaintext to cmd stdin
+  keygen                   generate age keypair for encryption
+  register                 register public key with server (requires --token)
+  keys-list                list registered public keys
+  status [options]         server status
+  topics [options]         list topics
+  health [options]         server health
+
+Exec options:
+  --encrypt-output         encrypt captured stdout of cmd, print to stdout
+  --decrypt-input          decrypt stdin, feed plaintext to cmd stdin
+  --key <age1pubkey>       recipient key (repeatable, for --encrypt-output)
+  --key-file <path>        file with recipient keys (for --encrypt-output)
+  --fetch-keys             fetch keys from server (for --encrypt-output)
 
 Connection options:
   --config <file>                     path to config.toml
@@ -73,6 +224,14 @@ Clip options:
   -a|--app <app>                                  meta.app tag
   --encoding base64|hex                           binary encoding
   -e|--encoded                                    stdin is already encoded (put)
+  -E|--encrypt                                    encrypt payload with age
+  --key <age1pubkey>                              recipient public key (repeatable)
+  --key-file <path>                               file with recipient public keys
+  --fetch-keys                                    fetch registered keys from server
+
+Register options:
+  --token <token>      admin token (or RCLIPBOARD_ADMIN_TOKEN env var)
+  --label <label>      key label (default: hostname)
   -h|--help
 EOS
 }
@@ -124,9 +283,9 @@ if [ -n "${RCLIPCTL_HOST:-}" ] || [ -n "${RCLIPCTL_PORT:-}" ]; then
 fi
 
 # ── parse subcommand options ──────────────────────────────────────────────────
-args=$(getopt -o "cpset:h" \
-    -l "app:,clipboard,primary,secondary,encoded,json,help,encoding:,\
-endpoint:,fifo:,host:,port:,transport:,uds:,topic:,config:" \
+args=$(getopt -o "cpsEet:h" \
+    -l "app:,clipboard,primary,secondary,encoded,encrypt,fetch-keys,json,help,encoding:,\
+endpoint:,fifo:,host:,port:,transport:,uds:,topic:,config:,key:,key-file:,token:,label:" \
     -- "$@")
 eval set -- "$args"
 
@@ -137,6 +296,12 @@ while true; do
         -p|--primary)   topic="p";              shift ;;
         -s|--secondary) topic="s";              shift ;;
         -e|--encoded)   encoded=1;              shift ;;
+        -E|--encrypt)   encrypt=1;              shift ;;
+        --fetch-keys)   fetch_keys=1;           shift ;;
+        --key)          EXTRA_KEYS+=("$2");     shift 2 ;;
+        --key-file)     KNOWN_KEYS_FILE="$2";   shift 2 ;;
+        --token)        REGISTER_TOKEN="$2";    shift 2 ;;
+        --label)        REGISTER_LABEL="$2";    shift 2 ;;
         --json)         json=1;                 shift ;;
         --encoding)     encoding=$2;            shift 2 ;;
         --endpoint)     ENDPOINT=$2; CLI_CONFIGURED=1; shift 2 ;;
@@ -295,41 +460,88 @@ ensure_fifo_dir() {
     fi
 }
 
-# ── clip put ──────────────────────────────────────────────────────────────────
-make_publish_body() {
-    local input_enc="${encoding}"
-    local api_enc="base64"
-    if [ -z "${input_enc}" ]; then input_enc="base64"; fi
-    local transform_cmd='base64 -w 0 -'
+# ── encryption helpers ────────────────────────────────────────────────────────
+require_age() {
+    command -v age >/dev/null 2>&1 && return
+    echo "error: age not found in PATH" >&2
+    echo "Install age: https://github.com/FiloSottile/age#installation" >&2
+    exit 1
+}
 
-    if [ "$encoded" = "1" ]; then
-        if [ "$input_enc" = "base64" ]; then
-            transform_cmd='cat'
-        elif [ "$input_enc" = "hex" ]; then
-            transform_cmd='xxd -r -p | base64 -w 0 -'
-        else
-            echo "unsupported encoded input for put: ${input_enc}" >&2; exit 2
-        fi
-    else
-        transform_cmd='base64 -w 0 -'
+build_age_recipients() {
+    local recipients=()
+    for k in "${EXTRA_KEYS[@]}"; do
+        recipients+=(-r "$k")
+    done
+    if [ -r "$KNOWN_KEYS_FILE" ]; then
+        while IFS= read -r line; do
+            line="${line%%#*}"
+            line="${line// /}"
+            [ -n "$line" ] && recipients+=(-r "$line")
+        done < "$KNOWN_KEYS_FILE"
     fi
-
-    value=$(bash -lc "${transform_cmd}")
-    cat << EOF
-{
-  "items": [{"topic":"${topic}","mime":"application/octet-stream","encoding":"${api_enc}","value":"${value}"}],
-  "meta": {"app":"${app}"}
+    if [ "$fetch_keys" = "1" ]; then
+        local server_keys
+        server_keys=$(curl "${CURL_SOCK_OPTS[@]}" -fsS "${BASE}/v1/keys.list" 2>/dev/null \
+            | jq -r '.keys[].public_key' 2>/dev/null) || true
+        while IFS= read -r k; do
+            [ -n "$k" ] && recipients+=(-r "$k")
+        done <<< "$server_keys"
+    fi
+    if [ ${#recipients[@]} -eq 0 ]; then
+        echo "error: --encrypt requires recipients via --key, $KNOWN_KEYS_FILE, or --fetch-keys" >&2
+        exit 1
+    fi
+    printf '%s\n' "${recipients[@]}"
 }
-EOF
+
+encrypt_value() {
+    local raw_b64="$1"
+    local recipients
+    recipients=($(build_age_recipients))
+    require_age
+    printf '%s' "$raw_b64" | base64 -d | age "${recipients[@]}" | base64 -w 0
 }
 
+# ── clip put ──────────────────────────────────────────────────────────────────
 call_put() {
     if [ "${TRANSPORT:-}" = "fifo" ]; then call_put_fifo; return; fi
     local url; url=$(endpoint_url "/v1/clip.put")
-    body=$(make_publish_body)
-    echo "$body" | jq -c | curl "${CURL_SOCK_OPTS[@]}" -fsS \
-        -X POST "$url" -H 'Content-Type: application/json' --data-binary @- \
-        | { if [ "$json" = "1" ]; then jq -c; else cat >/dev/null; fi; }
+
+    local input_enc="${encoding}"
+    local api_enc="base64"
+    if [ -z "${input_enc}" ]; then input_enc="base64"; fi
+
+    local value
+    if [ "$encoded" = "1" ]; then
+        case "$input_enc" in
+            base64) value=$(cat) ;;
+            hex)    value=$(xxd -r -p | base64 -w 0 -) ;;
+            *)      echo "unsupported encoded input for put: ${input_enc}" >&2; exit 2 ;;
+        esac
+    else
+        value=$(base64 -w 0 -)
+    fi
+
+    local is_encrypted=false
+    if [ "$encrypt" = "1" ]; then
+        value=$(encrypt_value "$value")
+        is_encrypted=true
+    fi
+
+    local body
+    body=$(jq -nc \
+        --arg topic "$topic" \
+        --arg value "$value" \
+        --arg mime "application/octet-stream" \
+        --arg enc "$api_enc" \
+        --argjson encrypted "$is_encrypted" \
+        --arg app "$app" \
+        '{items:[{topic:$topic,value:$value,mime:$mime,encoding:$enc,encrypted:$encrypted}],meta:{app:$app}}')
+
+    curl "${CURL_SOCK_OPTS[@]}" -fsS \
+        -X POST "$url" -H 'Content-Type: application/json' -d "$body" \
+    | { if [ "$json" = "1" ]; then jq -c; else cat >/dev/null; fi; }
 }
 
 # ── clip get ──────────────────────────────────────────────────────────────────
@@ -349,28 +561,85 @@ decode() {
     esac
 }
 
-call_get() {
-    if [ "${TRANSPORT:-}" = "fifo" ]; then call_get_fifo; return; fi
-    local url; url=$(endpoint_url "/v1/clip.get")
-    body=$(jq -cn --arg topic "$topic" '{topic: $topic}')
-    resp=$(printf '%s' "$body" | curl "${CURL_SOCK_OPTS[@]}" -fsS \
-        -X POST "$url" -H 'Content-Type: application/json' --data-binary @-)
-
-    if [ "$json" = "1" ]; then printf '%s' "$resp" | jq -c; return; fi
-
-    mime=$(printf '%s' "$resp" | jq -r '.item.mime // empty')
-    venc=$(printf '%s' "$resp" | jq -r '.item.encoding // empty')
-    val=$(printf '%s' "$resp" | jq -r '.item.value')
-
-    if [[ "$mime" == text/* && "$venc" == "utf-8" ]]; then printf '%s' "$val"; return; fi
-
+resolve_output_encoding() {
     if [ -n "${encoding}" ]; then encoded=1; fi
     if [ "${encoded}" = 1 ]; then
         if [ -z "${encoding}" ]; then encoding=base64; fi
     else
         encoding=null
     fi
+}
+
+call_get() {
+    if [ "${TRANSPORT:-}" = "fifo" ]; then call_get_fifo; return; fi
+    local url; url=$(endpoint_url "/v1/clip.get")
+    body=$(jq -cn --arg topic "$topic" '{topic: $topic}')
+
+    local extra_get_headers=()
+    if [ -r "$RCLIP_CONFIG_DIR/age_key.pub" ]; then
+        local own_pub_key
+        own_pub_key=$(cat "$RCLIP_CONFIG_DIR/age_key.pub")
+        [ -n "$own_pub_key" ] && extra_get_headers+=(-H "X-Age-Public-Key: $own_pub_key")
+    fi
+
+    resp=$(printf '%s' "$body" | curl "${CURL_SOCK_OPTS[@]}" -fsS \
+        "${extra_get_headers[@]}" \
+        -X POST "$url" -H 'Content-Type: application/json' --data-binary @-)
+
+    if [ "$json" = "1" ]; then printf '%s' "$resp" | jq -c; return; fi
+
+    eval "$(printf '%s' "$resp" | jq -r '.item | "is_encrypted=\(.encrypted // false) mime=\(.mime // "empty") venc=\(.encoding // "empty")"')"
+    val=$(printf '%s' "$resp" | jq -r '.item.value')
+
+    if [ "$is_encrypted" = "true" ]; then
+        require_age
+        if [ ! -r "$AGE_KEY_FILE" ]; then
+            echo "error: encrypted content but no key at $AGE_KEY_FILE" >&2
+            echo "Run: rclipctl keygen" >&2
+            exit 1
+        fi
+        local decrypted
+        decrypted=$(printf '%s' "$val" | decode "$venc" | age --decrypt -i "$AGE_KEY_FILE" 2>/dev/null)
+        if [ $? -ne 0 ]; then
+            echo "error: decryption failed (no matching key?)" >&2
+            exit 1
+        fi
+        resolve_output_encoding
+        printf '%s' "$decrypted" | encode "${encoding}"
+        return
+    fi
+
+    if [[ "$mime" == text/* && "$venc" == "utf-8" ]]; then printf '%s' "$val"; return; fi
+
+    resolve_output_encoding
     printf '%s' "$val" | decode "$venc" | encode "${encoding}"
+}
+
+# ── key registry ─────────────────────────────────────────────────────────────
+call_register() {
+    local pub_key
+    pub_key=$(cat "$RCLIP_CONFIG_DIR/age_key.pub" 2>/dev/null || true)
+    if [ -z "$pub_key" ]; then
+        echo "error: no public key found at $RCLIP_CONFIG_DIR/age_key.pub" >&2
+        echo "Run: rclipctl keygen" >&2
+        exit 1
+    fi
+    if [ -z "$REGISTER_TOKEN" ]; then
+        echo "error: admin token required. Use --token or set RCLIPBOARD_ADMIN_TOKEN" >&2
+        exit 1
+    fi
+    local label="${REGISTER_LABEL:-$(hostname)}"
+    local body
+    body=$(jq -nc --arg pk "$pub_key" --arg lbl "$label" '{"public_key":$pk,"label":$lbl}')
+    curl "${CURL_SOCK_OPTS[@]}" -fsS \
+        -X POST "$(endpoint_url "/v1/keys.publish")" \
+        -H 'Content-Type: application/json' \
+        -H "Authorization: Bearer $REGISTER_TOKEN" \
+        -d "$body" | jq -c
+}
+
+call_keys_list() {
+    curl "${CURL_SOCK_OPTS[@]}" -fsS "$(endpoint_url "/v1/keys.list")" | jq -c
 }
 
 # ── status / topics / health ──────────────────────────────────────────────────
@@ -416,21 +685,18 @@ call_get_fifo() {
     local path; path=$(fifo_path state_raw)
     if [ ! -f "$path" ]; then echo "topic state not found: $topic" >&2; exit 1; fi
 
-    if [ -n "${encoding}" ]; then encoded=1; fi
-    if [ "${encoded}" = 1 ]; then
-        if [ -z "${encoding}" ]; then encoding=base64; fi
-    else
-        encoding=null
-    fi
+    resolve_output_encoding
     cat "$path" | encode "${encoding}"
 }
 
 # ── dispatch ──────────────────────────────────────────────────────────────────
 case "$mode" in
-    put|clip) call_put ;;
-    get)      call_get ;;
-    status)   call_status ;;
-    topics)   call_topics ;;
-    health)   call_health ;;
-    *)        echo "unknown subcommand: $mode" >&2; usage; exit 2 ;;
+    put|clip)   call_put ;;
+    get)        call_get ;;
+    register)   call_register ;;
+    keys-list)  call_keys_list ;;
+    status)     call_status ;;
+    topics)     call_topics ;;
+    health)     call_health ;;
+    *)          echo "unknown subcommand: $mode" >&2; usage; exit 2 ;;
 esac

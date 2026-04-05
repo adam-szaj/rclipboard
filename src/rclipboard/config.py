@@ -42,7 +42,9 @@ _FIELDS: list[tuple[str, str, str, object]] = [
     ("xsel", "enabled", "RCLIPBOARD_XSEL", _bool_str),
     ("xsel", "path", "RCLIPBOARD_XSEL_PATH", str),
     ("xsel", "interval_ms", "RCLIPBOARD_XSEL_INTERVAL_MS", str),
+    ("xsel", "encrypt", "RCLIPBOARD_XSEL_ENCRYPT", _bool_str),
     ("raw_uds", "path", "RCLIPBOARD_RAW_UDS_PATH", str),
+    ("server", "admin_token", "RCLIPBOARD_ADMIN_TOKEN", str),
     ("server", "reload", "RCLIPBOARD_RELOAD", _bool_str),
     ("proxy", "enabled", "RCLIPBOARD_PROXY", _bool_str),
     ("proxy", "upstream_endpoint", "RCLIPBOARD_UPSTREAM_ENDPOINT", str),
@@ -51,6 +53,8 @@ _FIELDS: list[tuple[str, str, str, object]] = [
     ("ssl", "keyfile_password", "RCLIPBOARD_SSL_KEYFILE_PASSWORD", str),
     ("client", "transport", "RCLIPCTL_TRANSPORT", str),
     ("client", "endpoint", "RCLIPCTL_ENDPOINT", str),
+    ("encryption", "key_file", "RCLIPBOARD_AGE_KEY_FILE", str),
+    ("encryption", "known_keys_file", "RCLIPBOARD_KNOWN_KEYS_FILE", str),
 ]
 
 

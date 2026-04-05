@@ -16,10 +16,14 @@ make run-proxy        # proxy mode (connects to upstream)
 make run-proxy-dev    # proxy mode with --reload on port 7878
 
 # Tests
-make test                    # all tests (functional + integration)
+make test                    # all tests (functional + integration + ssl)
 make test-http               # HTTP functional tests only
 make test-ws                 # WebSocket functional tests only
 make test-proxy-integration  # proxy integration tests only
+make test-ssl                # HTTPS/WSS + SSL proxy tests
+
+# Key registry tests
+PYTHONPATH=src .venv/bin/python -m unittest tests.test_functional_keys -v
 
 # Run a single test module/case
 PYTHONPATH=src .venv/bin/python -m unittest tests.test_functional_http.ClassName.test_method -v
@@ -106,12 +110,17 @@ The local HTTP/WS server then serves local clients, reducing SSH round-trips. Th
 | `RCLIPBOARD_XSEL` | `1` to enable X11 clipboard polling |
 | `RCLIPBOARD_XSEL_PATH` | Path to `xsel` binary (default: `/usr/bin/xsel`) |
 | `RCLIPBOARD_XSEL_INTERVAL_MS` | X11 clipboard poll interval (default: 500) |
+| `RCLIPBOARD_XSEL_ENCRYPT` | `1` to encrypt X11 clipboard data via `rclipctl exec` (default: `0`) |
+| `RCLIPCTL_PATH` | Path to `rclipctl` binary used by xsel encrypt mode (default: `rclipctl`) |
 | `RCLIPBOARD_NOTIFY_DELAY_MS` | Notification debounce delay (default: 250) |
 | `RCLIPBOARD_LOG_LEVEL` | App log level |
 | `RCLIPBOARD_PY_LOG_LEVEL` | Python logging level override |
 | `RCLIPBOARD_SSL_CERTFILE/KEYFILE` | Paths to TLS cert/key for HTTPS |
 | `RCLIPBOARD_SSL_KEYFILE_PASSWORD` | Password for encrypted private key |
 | `RCLIPBOARD_RELOAD` | `1` to enable uvicorn reload mode (dev only) |
+| `RCLIPBOARD_ADMIN_TOKEN` | Bearer token required for `POST /v1/keys.publish` (empty = registry disabled) |
+| `RCLIPBOARD_AGE_KEY_FILE` | Path to age private key file (default: `~/.config/rclipboard/age_key.txt`) |
+| `RCLIPBOARD_KNOWN_KEYS_FILE` | Path to file with recipient public keys (default: `~/.config/rclipboard/known_keys`) |
 
 ### Configuration via config.toml
 
@@ -127,7 +136,6 @@ Priority order (highest wins): CLI flags > environment variables > config.toml >
 endpoint = "127.0.0.1:8989"
 
 # Raw UDS socket (JSON-RPC 2.0 NDJSON transport)
-# Replaces FIFO for lightweight local clients (shell scripts, editors)
 raw_uds_path = "/tmp/clipboard_raw.sock"
 
 # Log levels: trace, debug, info, warn, error
@@ -140,18 +148,22 @@ notify_delay_ms = 250
 # Development: enable uvicorn auto-reload on file changes
 reload = false
 
+# Admin token for POST /v1/keys.publish; leave empty to disable key registry
+admin_token = ""
+
 [xsel]
 # X11 clipboard integration (Linux with X11 server)
 enabled = true
 path = "/usr/bin/xsel"
 interval_ms = 500
+# Encrypt X11 clipboard data via rclipctl exec (requires age + registered keys)
+encrypt = false
 
 [proxy]
 # Enable proxy mode (upstream client)
 enabled = false
 
 # Upstream server: "host:port" (TCP), "/path/to/socket" (UDS), "wss://host:port" (WSS)
-# Set only if enabled = true
 upstream_endpoint = "localhost:8989"
 
 [ssl]
@@ -165,6 +177,12 @@ keyfile_password = ""  # optional, for encrypted private keys
 # Transport priority: "fifo", "uds", "tcp"
 transport = ""
 endpoint = ""
+
+[encryption]
+# Path to age private key (used by rclipctl for decryption)
+key_file = "~/.config/rclipboard/age_key.txt"
+# File with one recipient public key per line (used by rclipctl --encrypt)
+known_keys_file = "~/.config/rclipboard/known_keys"
 ```
 
 **Loading configuration:**
@@ -202,21 +220,37 @@ The `rclipboard config env` command prints all resolved environment variables (a
    - Cancel the dispatcher task last
    - HTTP/WS server shuts down implicitly when lifespan exits
 
-### CLI (`scripts/rclipctl`)
+### CLI (`scripts/bin/rclipctl`)
 
-Shell script. Auto-detects transport priority: FIFO → UDS → TCP. Subcommands: `clip`, `getclip`, `topics`, `status`, `health`.
+Shell script. Auto-detects transport priority: FIFO → UDS → TCP.
+
+| Subcommand | Purpose |
+|-----------|---------|
+| `put` / `clip` | Read stdin and call `clip.put` |
+| `get` | Call `clip.get`, auto-decrypt if `encrypted=true` |
+| `exec --encrypt-output -- <cmd>` | Run command, encrypt stdout with age, print ciphertext to stdout |
+| `exec --decrypt-input -- <cmd>` | Decrypt stdin with local age key, pipe plaintext to command |
+| `keygen` | Generate age X25519 keypair (`age_key.txt` + `age_key.pub`) |
+| `register [--token T]` | Register own public key with server (`POST /v1/keys.publish`) |
+| `keys-list` | List registered public keys (`GET /v1/keys.list`) |
+| `status` / `topics` / `health` | Server info |
+
+Encryption flags on `put`: `--encrypt` / `-E`, `--key <age1...>`, `--key-file <path>`, `--fetch-keys` (fetch from server registry).
+
+`exec` exits before transport resolution — it is a pure stdio pipe with no server communication.
 
 ### Module responsibilities
 
 | Module | Responsibility |
 |--------|-----------------|
-| `app_state.py` | Central topic storage, subscriber management, dispatch queue, debounce logic, background task tracking |
+| `app_state.py` | Central topic storage, subscriber management, dispatch queue, debounce logic, background task tracking, in-memory public key registry |
 | `types.py` | Pydantic models, `Interface`/`BidirectionalInterface` base classes with drainer infrastructure |
-| `http.py` | HTTP REST endpoints (blocking by design, no async send) |
+| `http.py` | HTTP REST endpoints; `POST /v1/keys.publish` (token auth), `GET /v1/keys.list`, `clip.get` encrypted gate |
 | `ws.py` | WebSocket server, JSON-RPC 2.0 handling, per-connection drainer |
 | `uds.py` | Raw Unix Domain Socket server, JSON-RPC 2.0 over NDJSON, per-connection drainer |
-| `xsel.py` | X11 clipboard poller, async subprocess execution with timeout |
+| `xsel.py` | X11 clipboard poller; optional encrypt mode via `rclipctl exec` wrapper |
 | `proxy.py` | Upstream WebSocket client, watch subscription, local topic replication |
+| `config.py` | Loads `config.toml`, maps TOML fields to env vars, supports `${VAR}` expansion |
 
 ### Task lifecycle and drainer pattern details
 
@@ -249,8 +283,46 @@ The raw UDS server at `/tmp/clipboard_raw.sock` (path configurable via `RCLIPBOA
 
 Message flow: client sends `{"jsonrpc":"2.0","id":123,"method":"clip.get","params":{...}}`, server responds with `{"jsonrpc":"2.0","id":123,"result":{...}}` or `{"jsonrpc":"2.0","id":123,"error":{...}}`. Subscriptions (via `clip.watch`) receive unsolicited `{"jsonrpc":"2.0","method":"clip.changed","params":{...}}` events.
 
+### Encryption (client-side, age format)
+
+The server is a **blind store** — it never encrypts or decrypts data. All encryption is client-side using the [age](https://age-encryption.org/) format via the `age` CLI.
+
+**`ClipboardItem.encrypted`** — bool field (default `false`). When `true`:
+- `value` contains base64-encoded age ciphertext
+- `clip.get` over HTTP requires `X-Age-Public-Key: age1...` header with a key registered in the server's in-memory registry; returns 403 if missing or unknown
+- `rclipctl get` auto-decrypts using the local private key
+
+**Public key registry** (`AppState.public_keys`):
+- `POST /v1/keys.publish` — register a public key; requires `Authorization: Bearer <RCLIPBOARD_ADMIN_TOKEN>`; returns 503 if token not configured
+- `GET /v1/keys.list` — open; returns all registered keys
+- Registry is in-memory only (lost on restart)
+
+**`rclipctl` encryption workflow:**
+```bash
+rclipctl keygen                          # generate keypair
+rclipctl register --token <admin_token>  # register public key with server
+echo "secret" | rclipctl put --encrypt --fetch-keys  # encrypt + send
+rclipctl get                             # auto-decrypt
+```
+
+**`rclipctl exec` — pure stdio encryption pipe** (no server communication):
+```bash
+# Encrypt a command's stdout and print ciphertext to stdout
+rclipctl exec --encrypt-output --key age1... -- xsel -ob
+
+# Decrypt stdin and feed plaintext to a command's stdin
+rclipctl exec --decrypt-input -- xsel -ib
+```
+
+**xsel encrypted mode** (`RCLIPBOARD_XSEL_ENCRYPT=1`, default off):
+- Read: calls `rclipctl exec --encrypt-output --fetch-keys -- xsel <opt> -o`, stores ciphertext with `meta["encrypted"]=true`
+- Write: if incoming data is encrypted, calls `rclipctl exec --decrypt-input -- xsel -n -i <opt>`
+- Requires `age`, `rclipctl`, and at least one registered public key on PATH
+
 ### API contract
 
 See `docs/api-contract.md` for the full JSON-RPC 2.0 method specs (`clip.put`, `clip.get`, `clip.watch`, `clip.unwatch`, `topics.list`, `health.get`, `status.get`) and the `ClipboardItem` schema. All methods are available on HTTP, WebSocket, and raw UDS transports (with HTTP using REST conventions).
+
+Additional HTTP-only endpoints: `POST /v1/keys.publish`, `GET /v1/keys.list`.
 
 

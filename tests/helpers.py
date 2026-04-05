@@ -98,11 +98,14 @@ def get_json(url: str) -> tuple[int, object]:
         return exc.code, json.loads(exc.read().decode())
 
 
-def post_json(url: str, payload: object) -> tuple[int, object]:
+def post_json(url: str, payload: object, extra_headers: dict[str, str] | None = None) -> tuple[int, object]:
+    headers = {"Content-Type": "application/json"}
+    if extra_headers:
+        headers.update(extra_headers)
     req = urllib.request.Request(
         url,
         data=json.dumps(payload).encode(),
-        headers={"Content-Type": "application/json"},
+        headers=headers,
         method="POST",
     )
     try:

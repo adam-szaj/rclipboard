@@ -4,6 +4,8 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from urllib.parse import urlparse
 
+from pydantic import JsonValue
+
 from rclipboard.types import ClipboardItem, TopicData
 
 
@@ -51,7 +53,9 @@ def parse_endpoint(
         host, port_raw = raw.rsplit(":", 1)
         if not port_raw.isdigit():
             raise ValueError(f"invalid endpoint port: {raw}")
-        return EndpointConfig(scheme="http", host=host or default_host, port=int(port_raw))
+        return EndpointConfig(scheme="http",
+                              host=host or default_host,
+                              port=int(port_raw))
 
     return EndpointConfig(scheme="http", host=raw, port=default_port)
 
@@ -89,25 +93,31 @@ def topic_data_to_clipboard_item(data: TopicData) -> ClipboardItem:
     value_type = data.value.value_type
     encoding = data.value.value_encoding
     mime = "application/octet-stream" if value_type == "binary" else "text/plain"
-    rpc_encoding = "utf-8" if encoding == "plain" else encoding
+    rpc_encoding = "utf-8" if encoding == "plain" else encoding or "base64"
+    encrypted = data.meta.get("encrypted", False) is True
     return ClipboardItem(
         topic=data.topic,
         value=value,
         mime=mime,
         encoding=rpc_encoding,
+        encrypted=encrypted,
     )
 
 
-def clipboard_item_to_topic_data(item: ClipboardItem,
-                                 meta: dict[str, str] | None = None) -> TopicData:
+def clipboard_item_to_topic_data(
+        item: ClipboardItem,
+        meta: dict[str, JsonValue] | None = None) -> TopicData:
     value_type = "binary"
     value_encoding = item.encoding
     if item.encoding == "utf-8":
         value_type = "text"
         value_encoding = "plain"
+    combined_meta = dict(meta or {})
+    if item.encrypted:
+        combined_meta["encrypted"] = True
     return TopicData.model_validate({
         "topic": item.topic,
-        "meta": meta or {},
+        "meta": combined_meta,
         "value": {
             "value": item.value,
             "type": value_type,
