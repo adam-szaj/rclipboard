@@ -1,0 +1,132 @@
+# rclipboard dev/test compose — 3 containers:
+#
+#  upstream  — plain server, port 8989; key registry enabled
+#  proxy     — starts without upstream; test proxy.connect via HTTP API
+#  client    — debian + curl + jq + age + rclipctl; interactive test shell
+#
+# Quick start:
+#   docker compose build
+#   docker compose up -d upstream proxy
+#   docker compose run --rm client bash
+#
+# Inside client:
+#   # 1. health check
+#   rclipctl --endpoint http://upstream:8989 health
+#
+#   # 2. key registry: generate + register
+#   rclipctl keygen
+#   rclipctl --endpoint http://upstream:8989 register --token devtoken
+#
+#   # 3. put encrypted clip to upstream
+#   echo "secret payload" | rclipctl --endpoint http://upstream:8989 put --encrypt --fetch-keys
+#
+#   # 4. connect proxy to upstream (dynamic, no restart)
+#   curl -s -X POST http://proxy:8988/v1/proxy.connect \
+#     -H 'Content-Type: application/json' \
+#     -H 'Authorization: Bearer devtoken' \
+#     -d '{"endpoint":"upstream:8989","reconnect":true}' | jq
+#
+#   # 5. get clip via proxy (auto-decrypt)
+#   rclipctl --endpoint http://proxy:8988 get
+#
+#   # 6. lazy sync: put a large payload, verify proxy receives stub
+#   dd if=/dev/urandom bs=1k count=512 | base64 | \
+#     rclipctl --endpoint http://upstream:8989 put -t large
+#   curl -s http://proxy:8988/v1/status.get | jq '.topic_status'
+#
+#   # 7. disconnect proxy
+#   curl -s -X POST http://proxy:8988/v1/proxy.disconnect \
+#     -H 'Authorization: Bearer devtoken' -d '{}' | jq
+
+services:
+
+  upstream:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: rclip-upstream
+    environment:
+      RCLIPBOARD_BIND_ADDR: "0.0.0.0"
+      RCLIPBOARD_BIND_PORT: "8989"
+      RCLIPBOARD_PROXY: "0"
+      RCLIPBOARD_LOG_LEVEL: "debug"
+      RCLIPBOARD_PY_LOG_LEVEL: "DEBUG"
+      RCLIPBOARD_ADMIN_TOKEN: "devtoken"
+      RCLIPBOARD_NOTIFY_DELAY_MS: "100"
+    ports:
+      - "8989:8989"
+    networks:
+      - rclip
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8989/v1/health.get"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  proxy:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: rclip-proxy
+    environment:
+      RCLIPBOARD_BIND_ADDR: "0.0.0.0"
+      RCLIPBOARD_BIND_PORT: "8988"
+      RCLIPBOARD_PROXY: "0"          # start without upstream; connect via API
+      RCLIPBOARD_LOG_LEVEL: "debug"
+      RCLIPBOARD_PY_LOG_LEVEL: "DEBUG"
+      RCLIPBOARD_ADMIN_TOKEN: "devtoken"
+      RCLIPBOARD_NOTIFY_DELAY_MS: "100"
+      # Lazy sync: send stub instead of inline value for payloads >= 64 KB
+      RCLIPBOARD_LAZY_LOCAL_KB: "64"
+      # Upstream put mode: immediate | debounced | on_demand
+      RCLIPBOARD_UPSTREAM_PUT_MODE: "immediate"
+    ports:
+      - "8988:8988"
+    networks:
+      - rclip
+    depends_on:
+      upstream:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8988/v1/health.get"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    command:
+      - python
+      - -m
+      - uvicorn
+      - rclipboard.main:app
+      - --host
+      - "0.0.0.0"
+      - --port
+      - "8988"
+      - --log-level
+      - debug
+
+  client:
+    build:
+      context: .
+      dockerfile: docker/client/Dockerfile
+    container_name: rclip-client
+    environment:
+      RCLIPBOARD_ADMIN_TOKEN: "devtoken"
+      # Point rclipctl at upstream by default; override with --endpoint
+      RCLIPCTL_ENDPOINT: "http://upstream:8989"
+      RCLIP_UPSTREAM: "http://upstream:8989"
+      RCLIP_PROXY: "http://proxy:8988"
+    networks:
+      - rclip
+    depends_on:
+      upstream:
+        condition: service_healthy
+      proxy:
+        condition: service_healthy
+    stdin_open: true
+    tty: true
+    # Keep container running for interactive use; override for scripted tests
+    command: ["bash"]
+
+networks:
+  rclip:
+    driver: bridge
