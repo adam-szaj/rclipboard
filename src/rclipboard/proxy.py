@@ -155,13 +155,14 @@ class ProxyClient(BidirectionalInterface):
 
     async def run_loop(self):
         ws_cm: Any
+        _max_size = 64 * 1024 * 1024  # 64 MiB — websockets default (1 MiB) drops large payloads
         if self.unix:
             debug(f"unix_connect: path: {self.path} uri={self.url}")
-            ws_cm = unix_connect(path=str(self.path), uri=self.url)
+            ws_cm = unix_connect(path=str(self.path), uri=self.url, max_size=_max_size)
         else:
             ssl_ctx = _make_upstream_ssl_ctx()
-            ws_cm = (connect(self.url, ssl=ssl_ctx)
-                     if ssl_ctx is not None else connect(self.url))
+            ws_cm = (connect(self.url, ssl=ssl_ctx, max_size=_max_size)
+                     if ssl_ctx is not None else connect(self.url, max_size=_max_size))
 
         async with ws_cm as ws:
             self.ws = ws
