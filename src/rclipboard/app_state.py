@@ -119,6 +119,8 @@ class AppState:
         self.subs: dict[str, set[Interface]] = {}
         self.notify_delay_ms: int = int(
             os.environ.get("RCLIPBOARD_NOTIFY_DELAY_MS", "250"))
+        self.lazy_local_threshold: int = (
+            int(os.environ.get("RCLIPBOARD_LAZY_LOCAL_KB", "0")) * 1024)
         self.pending_notifications: dict[str, InternalTopicData] = {}
         self.notification_tasks: dict[str, asyncio.Task[None]] = {}
         self.notification_lock = asyncio.Lock()
@@ -216,6 +218,7 @@ class AppState:
             return
         source = topic_data.source
         encrypted = topic_data.data.meta.get("encrypted") is True
+        val_len = len(topic_data.data.value.value.encode())
         for conn in subs:
             if isinstance(conn, BidirectionalInterface):
                 if source and conn is source:
@@ -224,7 +227,17 @@ class AppState:
                     pub_key = getattr(conn, "public_key", None)
                     if not pub_key or pub_key not in self.public_keys:
                         continue
-                conn.deliver(topic_data.data)
+                data = topic_data.data
+                if (self.lazy_local_threshold > 0
+                        and val_len >= self.lazy_local_threshold
+                        and getattr(conn, "_is_rpc_transport", False)):
+                    from rclipboard.types import ValueData
+                    data = data.model_copy(update={
+                        "value": ValueData(value="", type="text", encoding="plain"),
+                        "stub": True,
+                        "fetch_url": f"/v1/clip/{data.topic}",
+                    })
+                conn.deliver(data)
 
     async def _notify_topic_data(self, topic_data: InternalTopicData) -> None:
         self._dispatch_data_item(topic_data)

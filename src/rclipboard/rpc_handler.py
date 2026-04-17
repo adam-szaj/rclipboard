@@ -31,6 +31,7 @@ from rclipboard.types import (
     StatusResult,
     TopicData,
     TopicsListResult,
+    ValueData,
 )
 
 logger = gl(__name__)
@@ -42,6 +43,16 @@ trace = logger.debug
 
 _topic_data_to_clipboard_item = topic_data_to_clipboard_item
 _clipboard_item_to_topic_data = clipboard_item_to_topic_data
+
+
+def _stub_if_large(td: TopicData, threshold: int) -> TopicData:
+    if len(td.value.value.encode()) >= threshold:
+        return td.model_copy(update={
+            "value": ValueData(value="", type="text", encoding="plain"),
+            "stub": True,
+            "fetch_url": f"/v1/clip/{td.topic}",
+        })
+    return td
 
 
 class RPCMethodError(Exception):
@@ -60,6 +71,7 @@ class RPCHandler(BidirectionalInterface):
         self.app = app
         self.topics: set[str] = set()
         self.public_key: str | None = None
+        self._is_rpc_transport: bool = True
 
     @property
     @abstractmethod
@@ -123,10 +135,16 @@ class RPCHandler(BidirectionalInterface):
         new_topics = [
             topic for topic in params.topics if topic not in self.topics
         ]
-        contents = {}
+        contents: dict = {}
         if new_topics:
             contents = subscribe_client(self.app, self, new_topics)
             self.topics.update(new_topics)
+        threshold = self.app.state.main.lazy_local_threshold
+        if threshold > 0:
+            contents = {
+                topic: _stub_if_large(td, threshold)
+                for topic, td in contents.items()
+            }
         return ClipWatchResult(topics=list(self.topics), contents=contents)
 
     async def _handle_clip_unwatch(

@@ -86,6 +86,8 @@ class TopicData(BaseModel):
     topic: Annotated[str, Field(init=True)]
     value: Annotated[ValueData, Field(init=True)]
     meta: Annotated[dict[str, JsonValue], Field(init=True)]
+    stub: bool = False          # value omitted — fetch via fetch_url
+    fetch_url: str | None = None  # relative URL to retrieve full value
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 

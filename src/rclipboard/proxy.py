@@ -14,6 +14,7 @@ from pydantic import JsonValue
 from websockets.asyncio.client import connect, unix_connect
 
 from rclipboard.app_state import (
+    enqueue_request_topic,
     enqueue_topic_data,
     register_client,
     subscribe_client,
@@ -27,11 +28,16 @@ from rclipboard.helpers import (
     upstream_endpoint_from_env,
 )
 from rclipboard.log import get_logger
+from rclipboard.rpc_handler import RPCHandler, RPCMethodError
 from rclipboard.types import (
-    BidirectionalInterface,
     ClipboardItem,
+    ClipGetResult,
     ClipWatchResult,
+    JSONRPCRequestMessage,
+    RPCError,
+    RPCId,
     TopicData,
+    ValueData,
 )
 
 logger: Logger = get_logger(__name__)
@@ -43,8 +49,11 @@ trace = logger.debug
 
 DEFAULT_TOPICS = ["c", "p", "s"]
 
+_topic_data_to_clipboard_item = topic_data_to_clipboard_item
+_clipboard_item_to_topic_data = clipboard_item_to_topic_data
 
-class ProxyClient(BidirectionalInterface):
+
+class ProxyClient(RPCHandler):
     """
     Local proxy agent that maintains one upstream WS connection.
 
@@ -52,6 +61,7 @@ class ProxyClient(BidirectionalInterface):
     - on connect, subscribes upstream with `clip.watch`
     - on local publish, forwards `clip.put` upstream
     - on upstream `clip.changed`, writes the item into local AppState
+    - handles incoming JSON-RPC requests from upstream (symmetric peer)
 
     The remote programs then talk to the proxy's local server instead of the
     main server directly, which reduces cross-host chatter during copy/paste.
@@ -66,8 +76,7 @@ class ProxyClient(BidirectionalInterface):
         path: str = "",
         topics: list[str] | set[str] | None = None,
     ):
-        BidirectionalInterface.__init__(self)
-        self.app = app
+        RPCHandler.__init__(self, app)
         self.url = url
         self.path = path
         self.unix = unix
@@ -75,6 +84,7 @@ class ProxyClient(BidirectionalInterface):
         self.topics = set(topics or DEFAULT_TOPICS)
         self.connected = False
         self._watch_id: int | str | None = None
+        self._pending_fetches: dict[str, Any] = {}
         info(f"{self.__dict__}")
 
     @property
@@ -82,10 +92,65 @@ class ProxyClient(BidirectionalInterface):
     def name(self) -> str:
         return "ProxyClient"
 
+    @property
+    def _lazy_upstream_threshold(self) -> int:
+        return int(os.environ.get("RCLIPBOARD_LAZY_UPSTREAM_KB", "0")) * 1024
+
+    @property
+    def _upstream_put_mode(self) -> str:
+        return os.environ.get("RCLIPBOARD_UPSTREAM_PUT_MODE", "immediate")
+
+    @property
+    def _upstream_sync_delay_ms(self) -> int:
+        return int(os.environ.get("RCLIPBOARD_UPSTREAM_SYNC_DELAY_MS", "5000"))
+
     @override
     async def send(self, data: TopicData):
+        threshold = self._lazy_upstream_threshold
+        val_len = len(data.value.value.encode())
+        mode = self._upstream_put_mode if (threshold == 0 or val_len >= threshold) else "immediate"
+
+        if mode == "immediate":
+            item = topic_data_to_clipboard_item(data)
+            await self.send_clip(item, meta=data.meta)
+        elif mode == "debounced":
+            await self._schedule_debounced_put(data)
+        elif mode == "on_demand":
+            # notify upstream that new data exists (stub clip.changed via clip.put with stub flag)
+            # upstream will clip.get when it wants the value
+            stub_item = topic_data_to_clipboard_item(data)
+            stub_meta = dict(data.meta)
+            stub_meta["stub"] = True
+            await self.send_clip(stub_item, meta=stub_meta)
+
+    async def _schedule_debounced_put(self, data: TopicData) -> None:
+        topic = data.topic
+        existing = self._pending_fetches.get(f"_dput_{topic}")
+        if existing is not None and not existing.done():
+            existing.cancel()  # type: ignore[union-attr]
+        task = a.create_task(self._debounced_put_task(data), name=f"dput_{topic}")
+        self._pending_fetches[f"_dput_{topic}"] = task  # type: ignore[assignment]
+
+    async def _debounced_put_task(self, data: TopicData) -> None:
+        await a.sleep(self._upstream_sync_delay_ms / 1000.0)
         item = topic_data_to_clipboard_item(data)
         await self.send_clip(item, meta=data.meta)
+
+    @override
+    async def _send_result(self, request_id: RPCId, result: JsonValue) -> None:
+        await self._send_json({"jsonrpc": "2.0", "id": request_id, "result": result})
+
+    @override
+    async def _send_error(self, request_id: RPCId, rpc_error: RPCError) -> None:
+        await self._send_json({
+            "jsonrpc": "2.0",
+            "id": request_id,
+            "error": rpc_error.model_dump(mode="json"),
+        })
+
+    @override
+    async def _send_event(self, method: str, params: object) -> None:
+        await self._send_json({"jsonrpc": "2.0", "method": method, "params": params})
 
     async def _send_json(self, payload: dict[str, JsonValue]) -> None:
         if self.ws is None:
@@ -118,8 +183,56 @@ class ProxyClient(BidirectionalInterface):
             },
         })
 
+    async def _upstream_clip_get(self, topic: str) -> TopicData | None:
+        """Fetch full value from upstream via WS clip.get. Returns None if unavailable."""
+        if not self.connected or self.ws is None:
+            return None
+        req_id = next_id()
+        future: a.Future[TopicData | None] = a.get_event_loop().create_future()
+        self._pending_fetches[str(req_id)] = future  # type: ignore[assignment]
+        try:
+            await self._send_json({
+                "jsonrpc": "2.0",
+                "id": req_id,
+                "method": "clip.get",
+                "params": {"topic": topic},
+            })
+            return await a.wait_for(future, timeout=10.0)
+        except a.TimeoutError:
+            return None
+        finally:
+            self._pending_fetches.pop(str(req_id), None)
+
+    @override
+    async def _handle_clip_get(self, request: JSONRPCRequestMessage) -> ClipGetResult:
+        params_raw = request.params or {}
+        topic = str(params_raw.get("topic", "")) if isinstance(params_raw, dict) else ""
+        content = await enqueue_request_topic(self.app, topic)
+        if content is not None and content.stub:
+            # local store has only a stub — fetch from upstream on demand
+            full = await self._upstream_clip_get(topic)
+            if full is None:
+                raise RPCMethodError(5031, "upstream unavailable")
+            await enqueue_topic_data(self.app, data=full, source=self)
+            content = full
+        if content is None:
+            raise RPCMethodError(1001, "Topic not found", {"topic": topic})
+        return ClipGetResult(item=_topic_data_to_clipboard_item(content))
+
     async def _handle_response(self, message: dict[str, JsonValue]) -> None:
         message_id = message.get("id")
+        pending_future = self._pending_fetches.pop(str(message_id), None)
+        if pending_future is not None and not pending_future.done():
+            if "error" in message:
+                pending_future.set_result(None)
+            else:
+                try:
+                    result = ClipGetResult.model_validate(message.get("result"))
+                    topic_data = _clipboard_item_to_topic_data(result.item, meta={})
+                    pending_future.set_result(topic_data)
+                except Exception:
+                    pending_future.set_result(None)
+            return
         if message_id == self._watch_id:
             if "error" in message:
                 warning(
@@ -127,7 +240,15 @@ class ProxyClient(BidirectionalInterface):
             else:
                 info(f"proxy subscribed upstream topics: {self.topics}")
                 result = ClipWatchResult.model_validate(message.get("result"))
+                threshold = self._lazy_upstream_threshold
                 for _, topic_data in result.contents.items():
+                    val_len = len(topic_data.value.value.encode())
+                    if threshold > 0 and val_len >= threshold:
+                        topic_data = topic_data.model_copy(update={
+                            "value": ValueData(value="", type="text", encoding="plain"),
+                            "stub": True,
+                            "fetch_url": f"/v1/clip/{topic_data.topic}",
+                        })
                     await enqueue_topic_data(
                         self.app,
                         data=topic_data,
@@ -145,11 +266,21 @@ class ProxyClient(BidirectionalInterface):
         meta = raw_meta if isinstance(raw_meta, dict) else {}
         if not isinstance(raw_items, list):
             return
+        threshold = self._lazy_upstream_threshold
         for raw_item in raw_items:
             item = ClipboardItem.model_validate(raw_item)
+            topic_data = _clipboard_item_to_topic_data(item, meta=meta)
+            val_len = len(topic_data.value.value.encode())
+            if threshold > 0 and val_len >= threshold:
+                # store stub locally — full value fetched on clip.get
+                topic_data = topic_data.model_copy(update={
+                    "value": ValueData(value="", type="text", encoding="plain"),
+                    "stub": True,
+                    "fetch_url": f"/v1/clip/{topic_data.topic}",
+                })
             await enqueue_topic_data(
                 self.app,
-                data=_clipboard_item_to_topic_data(item, meta=meta),
+                data=topic_data,
                 source=self,
             )
 
@@ -180,7 +311,20 @@ class ProxyClient(BidirectionalInterface):
                 if not isinstance(decoded, dict):
                     continue
                 if "method" in decoded:
-                    await self._handle_event(decoded)
+                    if decoded.get("id") is not None:
+                        # request from upstream — handle symmetrically
+                        try:
+                            request = JSONRPCRequestMessage.model_validate(decoded)
+                            await self.handle_request(request)
+                        except Exception as exc:
+                            await self._send_error(
+                                decoded.get("id"),
+                                RPCError(code=1000, message="Invalid Request",
+                                         data=str(exc)),
+                            )
+                    else:
+                        # notification (clip.changed) — no id, no response needed
+                        await self._handle_event(decoded)
                 elif "result" in decoded or "error" in decoded:
                     await self._handle_response(decoded)
 
