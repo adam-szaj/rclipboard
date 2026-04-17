@@ -93,6 +93,7 @@ class ProxyClient(RPCHandler):
         self.connect_count: int = 0                # total successful connections
         self.rx_count: int = 0                     # total clip.changed received
         self.tx_count: int = 0                     # total clip.put sent upstream
+        self.reconnect: bool = True                # whether to auto-reconnect on disconnect
         info(f"{self.__dict__}")
 
     @property
@@ -358,6 +359,9 @@ class ProxyClient(RPCHandler):
                 self.ws = None
                 self.app.state.proxy_connected = False
                 self.last_disconnect_at = a.get_event_loop().time()
+            if not self.reconnect:
+                info("proxy auto-reconnect disabled — stopping")
+                return
             await a.sleep(backoff)
             backoff = min(backoff * 2, 30.0)
 
@@ -419,6 +423,38 @@ async def shutdown_proxy(app: FastAPI) -> None:
     app.state.proxy_task = None
     app.state.proxy_connected = False
     app.state.proxy_enabled = False
+
+
+async def connect_proxy(app: FastAPI, endpoint: str, reconnect: bool = True) -> None:
+    """Disconnect current upstream (if any) and connect to a new one."""
+    await shutdown_proxy(app)
+
+    ws_kwargs = _make_ws_url_from_endpoint(endpoint)
+    client = ProxyClient(app, **ws_kwargs)
+    client.reconnect = reconnect
+    app.state.proxy_client = client
+    app.state.proxy_enabled = True
+    register_client(app, client)
+    subscribe_client(app, client, list(client.topics))
+    app.state.proxy_task = a.create_task(client.run(), name="proxy_upstream")
+
+
+async def disconnect_proxy(app: FastAPI) -> None:
+    """Disconnect upstream and disable auto-reconnect."""
+    client: ProxyClient | None = getattr(app.state, "proxy_client", None)
+    if client:
+        client.reconnect = False
+    await shutdown_proxy(app)
+
+
+def _make_ws_url_from_endpoint(endpoint: str) -> dict[str, str | bool | Path]:
+    from rclipboard.helpers import parse_endpoint
+    ep = parse_endpoint(endpoint)
+    if ep.scheme == "uds":
+        return {"url": "ws://localhost/ws", "path": ep.path or "", "unix": True}
+    if ep.scheme in {"https", "wss"}:
+        return {"url": f"wss://{ep.host}:{ep.port}/ws"}
+    return {"url": f"ws://{ep.host}:{ep.port}/ws"}
 
 
 def get_proxy_status(app: FastAPI) -> dict[str, JsonValue]:

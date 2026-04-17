@@ -22,6 +22,9 @@ from rclipboard.types import (
     KeyPublishParams,
     KeyPublishResult,
     KeysListResult,
+    ProxyConnectParams,
+    ProxyConnectResult,
+    ProxyDisconnectResult,
     StatusResult,
     TopicData,
     TopicsListParams,
@@ -34,7 +37,6 @@ from .app_state import (
     enqueue_topic_data,
 )
 from .log import get_logger
-from .types import Interface
 
 error = (get_logger(__name__)).error
 warning = (get_logger(__name__)).warning
@@ -151,6 +153,45 @@ def install_module(app: FastAPI):
         info(f"request from: {request.client}")
         entries = [KeyEntry(**v) for v in app.state.main.public_keys.values()]
         return KeysListResult(keys=entries)
+
+    @app.post("/v1/proxy.connect", response_model=ProxyConnectResult)
+    async def _proxy_connect(body: ProxyConnectParams,
+                             request: Request) -> ProxyConnectResult:
+        info(f"request from: {request.client}")
+        token = os.environ.get("RCLIPBOARD_ADMIN_TOKEN", "")
+        if not token:
+            raise HTTPException(
+                status_code=503,
+                detail={"code": 5031, "message": "Admin token not configured"},
+            )
+        auth = request.headers.get("authorization", "")
+        if auth != f"Bearer {token}":
+            raise HTTPException(
+                status_code=403,
+                detail={"code": 4031, "message": "Forbidden"},
+            )
+        from rclipboard.proxy import connect_proxy
+        await connect_proxy(app, body.endpoint, reconnect=body.reconnect)
+        return ProxyConnectResult(ok=True, endpoint=body.endpoint)
+
+    @app.post("/v1/proxy.disconnect", response_model=ProxyDisconnectResult)
+    async def _proxy_disconnect(request: Request) -> ProxyDisconnectResult:
+        info(f"request from: {request.client}")
+        token = os.environ.get("RCLIPBOARD_ADMIN_TOKEN", "")
+        if not token:
+            raise HTTPException(
+                status_code=503,
+                detail={"code": 5031, "message": "Admin token not configured"},
+            )
+        auth = request.headers.get("authorization", "")
+        if auth != f"Bearer {token}":
+            raise HTTPException(
+                status_code=403,
+                detail={"code": 4031, "message": "Forbidden"},
+            )
+        from rclipboard.proxy import disconnect_proxy
+        await disconnect_proxy(app)
+        return ProxyDisconnectResult(ok=True)
 
     @app.post("/v1/clip.put", response_model=ClipPutResult)
     async def _post_clip_put(body: ClipPutParams,

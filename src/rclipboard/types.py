@@ -193,6 +193,20 @@ class HealthResult(BaseModel):
     proxy_good: bool = False
 
 
+class ProxyConnectParams(BaseModel):
+    endpoint: str
+    reconnect: bool = True
+
+
+class ProxyConnectResult(BaseModel):
+    ok: bool
+    endpoint: str
+
+
+class ProxyDisconnectResult(BaseModel):
+    ok: bool
+
+
 class TopicStatus(BaseModel):
     topic: str
     ts: str | None = None        # UTC ISO timestamp from meta["ts"]
