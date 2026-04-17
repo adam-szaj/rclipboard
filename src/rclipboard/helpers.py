@@ -115,6 +115,8 @@ def clipboard_item_to_topic_data(
     combined_meta = dict(meta or {})
     if item.encrypted:
         combined_meta["encrypted"] = True
+    if "ts" not in combined_meta:
+        combined_meta["ts"] = utc_timestamp()
     return TopicData.model_validate({
         "topic": item.topic,
         "meta": combined_meta,

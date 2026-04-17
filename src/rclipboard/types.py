@@ -2,6 +2,7 @@ import asyncio as a
 import contextlib
 import logging
 import re
+import time
 from abc import ABC, abstractmethod
 from typing import Annotated, Literal, override
 
@@ -192,9 +193,18 @@ class HealthResult(BaseModel):
     proxy_good: bool = False
 
 
+class TopicStatus(BaseModel):
+    topic: str
+    ts: str | None = None        # UTC ISO timestamp from meta["ts"]
+    stub: bool = False           # True when only stub is stored locally
+    size: int | None = None      # byte length of value (None when stub)
+    stored_ago: float | None = None  # seconds since stored locally (monotonic)
+
+
 class StatusResult(BaseModel):
     ok: bool
     topics: list[str] = Field(default_factory=list)
+    topic_status: list[TopicStatus] = Field(default_factory=list)
     clients: list[str] = Field(default_factory=list)
     xsel: dict[str, JsonValue] = Field(default_factory=dict)
     proxy: dict[str, JsonValue] = Field(default_factory=dict)
@@ -205,6 +215,8 @@ class InternalTopicData(ABC):
     def __init__(self, data: TopicData, source: Interface | None):
         self.data: TopicData = data
         self.source: Interface | None = source
+        self.stored_at: float = time.monotonic()
+        self.stored_at_utc: str = data.meta.get("ts", "")  # type: ignore[assignment]
 
     @property
     def topic(self) -> str:

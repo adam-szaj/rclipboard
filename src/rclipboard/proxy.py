@@ -85,6 +85,14 @@ class ProxyClient(RPCHandler):
         self.connected = False
         self._watch_id: int | str | None = None
         self._pending_fetches: dict[str, Any] = {}
+        self.last_rx_at: float | None = None       # monotonic — last clip.changed received
+        self.last_tx_at: float | None = None       # monotonic — last clip.put sent upstream
+        self.last_connect_at: float | None = None  # monotonic — last successful connect
+        self.last_disconnect_at: float | None = None  # monotonic — last disconnect
+        self.last_error: str | None = None         # last exception message
+        self.connect_count: int = 0                # total successful connections
+        self.rx_count: int = 0                     # total clip.changed received
+        self.tx_count: int = 0                     # total clip.put sent upstream
         info(f"{self.__dict__}")
 
     @property
@@ -182,6 +190,8 @@ class ProxyClient(RPCHandler):
                 "meta": meta or dict(),
             },
         })
+        self.last_tx_at = a.get_event_loop().time()
+        self.tx_count += 1
 
     async def _upstream_clip_get(self, topic: str) -> TopicData | None:
         """Fetch full value from upstream via WS clip.get. Returns None if unavailable."""
@@ -283,6 +293,8 @@ class ProxyClient(RPCHandler):
                 data=topic_data,
                 source=self,
             )
+        self.last_rx_at = a.get_event_loop().time()
+        self.rx_count += 1
 
     async def run_loop(self):
         ws_cm: Any
@@ -299,6 +311,8 @@ class ProxyClient(RPCHandler):
             self.ws = ws
             self.connected = True
             self.app.state.proxy_connected = True
+            self.last_connect_at = a.get_event_loop().time()
+            self.connect_count += 1
             await self._watch()
             async for message in ws:
                 if not isinstance(message, str):
@@ -337,11 +351,13 @@ class ProxyClient(RPCHandler):
             except a.CancelledError:
                 raise
             except Exception as exc:
+                self.last_error = str(exc)
                 warning(f"proxy upstream error: {exc}", exc_info=True)
             finally:
                 self.connected = False
                 self.ws = None
                 self.app.state.proxy_connected = False
+                self.last_disconnect_at = a.get_event_loop().time()
             await a.sleep(backoff)
             backoff = min(backoff * 2, 30.0)
 
@@ -406,18 +422,52 @@ async def shutdown_proxy(app: FastAPI) -> None:
 
 
 def get_proxy_status(app: FastAPI) -> dict[str, JsonValue]:
+    import asyncio as _a
     conn: ProxyClient | None = getattr(app.state, "proxy_client", None)
-    if conn:
-        return {
-            "enabled": True,
-            "good": conn.connected,
-            "path": conn.path,
-            "url": conn.url,
-            "unix": conn.unix,
-            "topics": list(conn.topics),
-            "last_error": None,
-        }
-    return {"enabled": False, "good": False}
+    if conn is None:
+        return {"enabled": False, "good": False}
+
+    now = _a.get_event_loop().time()
+
+    def _age(ts: float | None) -> float | None:
+        return round(now - ts, 3) if ts is not None else None
+
+    pending_fetches = sum(
+        1 for k, v in conn._pending_fetches.items()
+        if not k.startswith("_dput_") and hasattr(v, "done") and not v.done()
+    )
+    pending_puts = sum(
+        1 for k, v in conn._pending_fetches.items()
+        if k.startswith("_dput_") and hasattr(v, "done") and not v.done()
+    )
+
+    sync_direction: str | None = None
+    if conn.last_rx_at is not None and conn.last_tx_at is not None:
+        sync_direction = "rx" if conn.last_rx_at > conn.last_tx_at else "tx"
+    elif conn.last_rx_at is not None:
+        sync_direction = "rx"
+    elif conn.last_tx_at is not None:
+        sync_direction = "tx"
+
+    return {
+        "enabled": True,
+        "good": conn.connected,
+        "url": conn.url,
+        "path": conn.path,
+        "unix": conn.unix,
+        "topics": list(conn.topics),
+        "connect_count": conn.connect_count,
+        "last_connect_ago": _age(conn.last_connect_at),
+        "last_disconnect_ago": _age(conn.last_disconnect_at),
+        "last_rx_ago": _age(conn.last_rx_at),
+        "last_tx_ago": _age(conn.last_tx_at),
+        "rx_count": conn.rx_count,
+        "tx_count": conn.tx_count,
+        "sync_direction": sync_direction,
+        "pending_fetches": pending_fetches,
+        "pending_puts": pending_puts,
+        "last_error": conn.last_error,
+    }
 
 
 _clipboard_item_to_topic_data = clipboard_item_to_topic_data

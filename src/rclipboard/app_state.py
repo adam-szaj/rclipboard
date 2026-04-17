@@ -3,7 +3,10 @@ import contextlib
 import os
 from abc import ABC, abstractmethod
 from logging import Logger
-from typing import Any, Generic, TypeVar, override
+from typing import TYPE_CHECKING, Any, Generic, TypeVar, override
+
+if TYPE_CHECKING:
+    from rclipboard.types import HealthResult, StatusResult
 
 from fastapi import FastAPI
 
@@ -177,13 +180,33 @@ class AppState:
         )
 
     def get_status(self, topics: list[str]) -> 'StatusResult':
+        import time as _time
         from rclipboard.proxy import get_proxy_status
         from rclipboard.xsel import get_xsel_status
-        from rclipboard.types import Interface, StatusResult
+        from rclipboard.types import Interface, StatusResult, TopicStatus
         clients = [c.name for c in self.clients if isinstance(c, Interface)]
+        now = _time.monotonic()
+        topic_status = []
+        for t in sorted(topics):
+            itd = self.topic_content.get(t)
+            if itd is None:
+                topic_status.append(TopicStatus(topic=t))
+                continue
+            ts_val = itd.data.meta.get("ts")
+            stub = itd.data.stub
+            size = None if stub else len(itd.data.value.value.encode())
+            stored_ago = round(now - itd.stored_at, 3)
+            topic_status.append(TopicStatus(
+                topic=t,
+                ts=str(ts_val) if ts_val else None,
+                stub=stub,
+                size=size,
+                stored_ago=stored_ago,
+            ))
         return StatusResult(
             ok=True,
             topics=list(sorted(topics)),
+            topic_status=topic_status,
             clients=clients,
             xsel=get_xsel_status(self.app),
             proxy=get_proxy_status(self.app),
