@@ -36,6 +36,14 @@ Tunnel direction:
   --reverse   remote side reaches local endpoint via ssh -R  (default)
   --forward   local side reaches remote endpoint via ssh -L
 
+Proxy automation:
+  --proxy-connect     after tunnel is up, send POST /v1/proxy.connect to local server
+  --proxy-disconnect  after tunnel is up, send POST /v1/proxy.disconnect to local server
+  --proxy-auto        send proxy.connect on start, proxy.disconnect on exit (trap EXIT)
+  --proxy-reconnect   passed to proxy.connect: reconnect=true (default)
+  --no-proxy-reconnect  passed to proxy.connect: reconnect=false
+  --token <token>     admin token for proxy.connect/disconnect (or RCLIPBOARD_ADMIN_TOKEN)
+
 Other:
   --login       open an interactive shell instead of -N (port-forward only)
   --daemonize   run in background
@@ -52,6 +60,9 @@ Examples:
   rcliptunel --local uds:///run/user/1000/rclipboard/proxy.sock \\
                    --remote tcp:127.0.0.1:8989 \\
                    --ssh user@remotehost --forward
+
+  # Reverse tunnel + auto proxy.connect/disconnect (requires RCLIPBOARD_ADMIN_TOKEN):
+  rcliptunel --ssh user@remotehost --proxy-auto --token mysecret
 EOF
     exit 0
 }
@@ -108,27 +119,37 @@ DIRECTION="reverse"
 LOCAL_SPEC=""
 REMOTE_SPEC=""
 SSH_EXTRA_ARGS=()
+PROXY_ACTION=""       # connect | disconnect | auto | ""
+PROXY_RECONNECT=true
+ADMIN_TOKEN="${RCLIPBOARD_ADMIN_TOKEN:-}"
 
 # ── parse arguments ───────────────────────────────────────────────────────────
 while [ $# -gt 0 ]; do
     case "$1" in
-        --local)        LOCAL_SPEC="$2";  shift 2 ;;
-        --local=*)      LOCAL_SPEC="${1#--local=}"; shift ;;
-        --remote)       REMOTE_SPEC="$2"; shift 2 ;;
-        --remote=*)     REMOTE_SPEC="${1#--remote=}"; shift ;;
-        --ssh)          SSH_DEST="$2";    shift 2 ;;
-        --ssh=*)        SSH_DEST="${1#--ssh=}"; shift ;;
-        --ssh-port)     SSH_PORT="$2";    shift 2 ;;
-        --ssh-port=*)   SSH_PORT="${1#--ssh-port=}"; shift ;;
-        --config)       shift 2 ;;   # already consumed above
-        --config=*)     shift ;;
-        --reverse)      DIRECTION="reverse"; shift ;;
-        --forward)      DIRECTION="forward"; shift ;;
-        --login|-l)     LOGIN=1;      shift ;;
-        --daemonize|-d) DAEMONIZE=1;  shift ;;
-        -h|--help)      usage ;;
-        --)             shift; SSH_EXTRA_ARGS=("$@"); break ;;
-        *)              echo "unknown option: $1" >&2; exit 1 ;;
+        --local)              LOCAL_SPEC="$2";       shift 2 ;;
+        --local=*)            LOCAL_SPEC="${1#--local=}"; shift ;;
+        --remote)             REMOTE_SPEC="$2";      shift 2 ;;
+        --remote=*)           REMOTE_SPEC="${1#--remote=}"; shift ;;
+        --ssh)                SSH_DEST="$2";         shift 2 ;;
+        --ssh=*)              SSH_DEST="${1#--ssh=}"; shift ;;
+        --ssh-port)           SSH_PORT="$2";         shift 2 ;;
+        --ssh-port=*)         SSH_PORT="${1#--ssh-port=}"; shift ;;
+        --config)             shift 2 ;;   # already consumed above
+        --config=*)           shift ;;
+        --reverse)            DIRECTION="reverse";   shift ;;
+        --forward)            DIRECTION="forward";   shift ;;
+        --login|-l)           LOGIN=1;               shift ;;
+        --daemonize|-d)       DAEMONIZE=1;           shift ;;
+        --proxy-connect)      PROXY_ACTION="connect"; shift ;;
+        --proxy-disconnect)   PROXY_ACTION="disconnect"; shift ;;
+        --proxy-auto)         PROXY_ACTION="auto";   shift ;;
+        --proxy-reconnect)    PROXY_RECONNECT=true;  shift ;;
+        --no-proxy-reconnect) PROXY_RECONNECT=false; shift ;;
+        --token)              ADMIN_TOKEN="$2";      shift 2 ;;
+        --token=*)            ADMIN_TOKEN="${1#--token=}"; shift ;;
+        -h|--help)            usage ;;
+        --)                   shift; SSH_EXTRA_ARGS=("$@"); break ;;
+        *)                    echo "unknown option: $1" >&2; exit 1 ;;
     esac
 done
 
@@ -247,10 +268,110 @@ echo "remote    : $REMOTE_SPEC"
 echo "tunnel    : $TUNNEL_FLAG $TUNNEL_SPEC"
 echo "command   : ${SSH_CMD[*]}"
 
+# ── proxy automation helpers ─────────────────────────────────────────────────
+# Build the base URL for the local rclipboard server (the side that will proxy).
+# In --reverse mode the local server should connect upstream through the tunnel
+# (upstream endpoint = REMOTE_SPEC from the remote machine's perspective, but
+# locally it's accessible via the forwarded port).  We send the API call to the
+# local server itself.
+#
+# local_api_base: HTTP base URL for the local rclipboard HTTP API
+local_api_base() {
+    if [ "$L_TYPE" = "uds" ]; then
+        echo "http://localhost"
+    else
+        echo "http://${L_HOST}:${L_PORT}"
+    fi
+}
+
+local_curl_opts() {
+    if [ "$L_TYPE" = "uds" ]; then
+        echo "--unix-socket ${L_PATH}"
+    fi
+}
+
+# upstream_endpoint_for_proxy: what the local rclipboard should use as upstream.
+# In --reverse mode the tunnel brings the remote endpoint to a local TCP port,
+# so the proxy should connect to that local port.
+# In --forward mode the tunnel exposes a remote port locally; same address.
+upstream_endpoint_for_proxy() {
+    if [ "$R_TYPE" = "tcp" ]; then
+        echo "${R_HOST}:${R_PORT}"
+    else
+        echo "$R_PATH"
+    fi
+}
+
+do_proxy_connect() {
+    if [ -z "$ADMIN_TOKEN" ]; then
+        echo "error: --proxy-connect/--proxy-auto requires --token or RCLIPBOARD_ADMIN_TOKEN" >&2
+        exit 1
+    fi
+    local base; base="$(local_api_base)"
+    local upstream; upstream="$(upstream_endpoint_for_proxy)"
+    local curl_sock_opts=()
+    if [ "$L_TYPE" = "uds" ]; then
+        curl_sock_opts=(--unix-socket "$L_PATH")
+    fi
+    local body
+    body=$(printf '{"endpoint":"%s","reconnect":%s}' "$upstream" "$PROXY_RECONNECT")
+    echo "proxy.connect → $upstream (reconnect=$PROXY_RECONNECT)"
+    curl "${curl_sock_opts[@]}" -fsS \
+        -X POST "${base}/v1/proxy.connect" \
+        -H 'Content-Type: application/json' \
+        -H "Authorization: Bearer ${ADMIN_TOKEN}" \
+        -d "$body" | { command -v jq >/dev/null 2>&1 && jq -c || cat; }
+    echo
+}
+
+do_proxy_disconnect() {
+    if [ -z "$ADMIN_TOKEN" ]; then
+        echo "error: --proxy-disconnect/--proxy-auto requires --token or RCLIPBOARD_ADMIN_TOKEN" >&2
+        return 1
+    fi
+    local base; base="$(local_api_base)"
+    local curl_sock_opts=()
+    if [ "$L_TYPE" = "uds" ]; then
+        curl_sock_opts=(--unix-socket "$L_PATH")
+    fi
+    echo "proxy.disconnect"
+    curl "${curl_sock_opts[@]}" -fsS \
+        -X POST "${base}/v1/proxy.disconnect" \
+        -H 'Content-Type: application/json' \
+        -H "Authorization: Bearer ${ADMIN_TOKEN}" \
+        -d '{}' | { command -v jq >/dev/null 2>&1 && jq -c || cat; }
+    echo
+}
+
 # ── execute ───────────────────────────────────────────────────────────────────
 if [ "$DAEMONIZE" = "1" ]; then
-    exec "${SSH_CMD[@]}" </dev/null >/dev/null 2>&1 &
-    echo "tunnel started in background (pid $!)"
+    "${SSH_CMD[@]}" </dev/null >/dev/null 2>&1 &
+    SSH_PID=$!
+    echo "tunnel started in background (pid $SSH_PID)"
+    if [ "$PROXY_ACTION" = "connect" ] || [ "$PROXY_ACTION" = "auto" ]; then
+        sleep 1   # give SSH a moment to establish the tunnel
+        do_proxy_connect
+    elif [ "$PROXY_ACTION" = "disconnect" ]; then
+        do_proxy_disconnect
+    fi
 else
-    exec "${SSH_CMD[@]}"
+    if [ "$PROXY_ACTION" = "disconnect" ]; then
+        do_proxy_disconnect
+        exec "${SSH_CMD[@]}"
+    elif [ "$PROXY_ACTION" = "connect" ]; then
+        exec "${SSH_CMD[@]}" &
+        SSH_PID=$!
+        sleep 1
+        do_proxy_connect
+        wait $SSH_PID
+    elif [ "$PROXY_ACTION" = "auto" ]; then
+        trap 'do_proxy_disconnect' EXIT
+        "${SSH_CMD[@]}" &
+        SSH_PID=$!
+        sleep 1
+        do_proxy_connect
+        wait $SSH_PID
+    else
+        exec "${SSH_CMD[@]}"
+    fi
 fi
