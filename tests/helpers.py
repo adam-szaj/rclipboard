@@ -95,7 +95,8 @@ def get_json(url: str) -> tuple[int, object]:
         with urllib.request.urlopen(req, timeout=5) as resp:
             return resp.status, json.loads(resp.read().decode())
     except urllib.error.HTTPError as exc:
-        return exc.code, json.loads(exc.read().decode())
+        with exc:
+            return exc.code, json.loads(exc.read().decode())
 
 
 def post_json(url: str, payload: object, extra_headers: dict[str, str] | None = None) -> tuple[int, object]:
@@ -112,7 +113,8 @@ def post_json(url: str, payload: object, extra_headers: dict[str, str] | None = 
         with urllib.request.urlopen(req, timeout=5) as resp:
             return resp.status, json.loads(resp.read().decode())
     except urllib.error.HTTPError as exc:
-        return exc.code, json.loads(exc.read().decode())
+        with exc:
+            return exc.code, json.loads(exc.read().decode())
 
 
 def wait_http_ready(port: int, timeout: float = 10.0) -> None:
@@ -221,7 +223,8 @@ def get_json_ssl(url: str, ctx: ssl.SSLContext) -> tuple[int, object]:
         with urllib.request.urlopen(req, timeout=5, context=ctx) as resp:
             return resp.status, json.loads(resp.read().decode())
     except urllib.error.HTTPError as exc:
-        return exc.code, json.loads(exc.read().decode())
+        with exc:
+            return exc.code, json.loads(exc.read().decode())
 
 
 def post_json_ssl(url: str, payload: object, ctx: ssl.SSLContext) -> tuple[int, object]:
@@ -235,7 +238,8 @@ def post_json_ssl(url: str, payload: object, ctx: ssl.SSLContext) -> tuple[int, 
         with urllib.request.urlopen(req, timeout=5, context=ctx) as resp:
             return resp.status, json.loads(resp.read().decode())
     except urllib.error.HTTPError as exc:
-        return exc.code, json.loads(exc.read().decode())
+        with exc:
+            return exc.code, json.loads(exc.read().decode())
 
 
 def wait_https_ready(port: int, ctx: ssl.SSLContext, timeout: float = 10.0) -> None:

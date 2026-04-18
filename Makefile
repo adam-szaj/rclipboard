@@ -21,7 +21,7 @@ RCLIPBOARD_PY_LOG_LEVEL := INFO
 IMAGE ?= rclipboard:latest
 TUNEL_TEST_IMAGE ?= rcliptunel-test:latest
 
-.PHONY: help install run run-dev run-uds run-https run-proxy run-dev-proxy cert cert-san health status topics docker-build docker-run docker-run-proxy docker-build-tunel-test plugin-install plugin-uninstall plugin-reload plugin-demo smoke proxy-smoke test test-functional test-integration test-http test-ws test-proxy-integration test-tunel test-https test-wss test-ssl-proxy-integration test-ssl systemd-user-install systemd-user-enable systemd-user-enable-socket systemd-user-disable nvim-plugin-install nvim-plugin-pack
+.PHONY: help install run run-dev run-uds run-https run-proxy run-dev-proxy cert cert-san health status topics docker-build docker-run docker-run-proxy docker-build-tunel-test plugin-install plugin-uninstall plugin-reload plugin-demo smoke proxy-smoke test test-functional test-integration test-http test-ws test-proxy-integration test-tunel test-https test-wss test-ssl-proxy-integration test-ssl test-soak test-soak-full systemd-user-install systemd-user-enable systemd-user-enable-socket systemd-user-disable nvim-plugin-install nvim-plugin-pack
 
 help:
 	@echo "Targets:"
@@ -214,6 +214,22 @@ proxy-smoke:
 	PYTHONPATH=src .venv/bin/python -m tests.run_proxy_smoke
 
 test: test-functional test-integration test-ssl
+
+# Soak tests (excluded from default `make test` — run explicitly)
+# Quick pass (30 s per class):  make test-soak
+# Full nightly (5 min per class): make test-soak-full
+SOAK_DURATION_S ?= 30
+SOAK_WORKERS    ?= 8
+SOAK_PAYLOAD_KB ?= 64
+
+test-soak:
+	SOAK_DURATION_S=$(SOAK_DURATION_S) SOAK_WORKERS=$(SOAK_WORKERS) \
+	SOAK_PAYLOAD_KB=$(SOAK_PAYLOAD_KB) \
+	PYTHONPATH=src .venv/bin/python -m unittest tests.test_soak -v
+
+test-soak-full:
+	SOAK_DURATION_S=300 SOAK_WORKERS=16 SOAK_PAYLOAD_KB=256 \
+	PYTHONPATH=src .venv/bin/python -m unittest tests.test_soak -v
 
 test-functional: test-http test-ws
 
