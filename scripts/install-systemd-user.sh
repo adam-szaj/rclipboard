@@ -33,12 +33,12 @@ for f in "$REPO_DIR"/scripts/*; do
 done
 for f in "$REPO_DIR"/scripts/bin/*; do
     if [ -f "$f" ]; then
-        copy_executable "$f" "$BIN_DIR/$(basename "$f")"
+        copy_executable "$f" "${HOME}/.local/bin/$(basename "$f")"
     fi
 done
 for f in "$REPO_DIR"/scripts/bash.d/*; do
-    if [ -f "$f" ]; then
-        copy_executable "$f" "$BIN_DIR/.bash.d/$(basename "$f")"
+    if [ -f "$f" ] ; then
+        copy_executable "$f" "${HOME}/.bash.d/$(basename "$f")"
     fi
 done
 

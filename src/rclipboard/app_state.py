@@ -353,9 +353,6 @@ class AppState:
 
     async def enqueue_request(self, action: str,
                               data: Any) -> TopicData | list[str] | None:
-        # warning(f"action: {action} data: {data}")
-        # if not data:
-        #     traceback.print_stack()
         if action.startswith("get:"):
             if action.endswith(":topic"):
                 assert isinstance(data, str)
