@@ -26,10 +26,10 @@ copy_executable() {
 
 # ── scripts ──────────────────────────────────────────────────────────────────
 for f in "$REPO_DIR"/scripts/*; do
-    [ -f "$f" ] && copy_executable "$f" "$BIN_DIR/$(basename "$f")"
+    [ -f "$f" ] && copy_executable "$f" "${BIN_DIR}/$(basename "$f")"
 done
 for f in "$REPO_DIR"/scripts/bin/*; do
-    [ -f "$f" ] && copy_executable "$f" "${HOME}/.local/bin/$(basename "$f")"
+    [ -f "$f" ] && copy_executable "$f" "${BIN_DIR}/$(basename "$f")"
 done
 for f in "$REPO_DIR"/scripts/bash.d/*; do
     [ -f "$f" ] && copy_executable "$f" "${HOME}/.bash.d/$(basename "$f")"

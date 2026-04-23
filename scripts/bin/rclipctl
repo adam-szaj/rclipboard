@@ -689,6 +689,67 @@ call_get_fifo() {
     cat "$path" | encode "${encoding}"
 }
 
+# ── monitor ───────────────────────────────────────────────────────────────────
+call_monitor() {
+    local subcmd="${1:-snapshot}"; shift || true
+    case "$subcmd" in
+        snapshot)
+            curl "${CURL_SOCK_OPTS[@]}" -fsS "${BASE}/v1/monitor.snapshot" | jq -c
+            ;;
+        status)
+            local fmt="plain"
+            while [ $# -gt 0 ]; do
+                case "$1" in --format) fmt="$2"; shift 2 ;; *) shift ;; esac
+            done
+            local snap
+            snap=$(curl "${CURL_SOCK_OPTS[@]}" -fsS "${BASE}/v1/monitor.snapshot" 2>/dev/null) || {
+                if [ "$fmt" = "tmux" ]; then printf '#[fg=red]down#[default]'
+                else echo "down"; fi
+                exit 0
+            }
+            local n_clients proxy_enabled proxy_good topic_summary pxy_seg
+            n_clients=$(printf '%s' "$snap" | jq -r '.clients | length')
+            proxy_enabled=$(printf '%s' "$snap" | jq -r '.proxy.enabled // false')
+            proxy_good=$(printf '%s' "$snap" | jq -r '.proxy.good // false')
+            topic_summary=$(printf '%s' "$snap" | jq -r \
+                '.topics[] | "\(.topic):\(if .size == null then "—" elif .size < 1024 then "\(.size)B" elif .size < 1048576 then "\(.size / 1024 | floor)KB" else "\(.size / 1048576 | floor)MB" end)"' \
+                2>/dev/null | tr '\n' ' ' | sed 's/ $//')
+            pxy_seg=""
+            if [ "$proxy_enabled" = "true" ]; then
+                if [ "$proxy_good" = "true" ]; then
+                    if [ "$fmt" = "tmux" ]; then pxy_seg=" pxy:#[fg=green]✔#[default]"
+                    else pxy_seg=" pxy:up"; fi
+                else
+                    if [ "$fmt" = "tmux" ]; then pxy_seg=" pxy:#[fg=red]✗#[default]"
+                    else pxy_seg=" pxy:down"; fi
+                fi
+            fi
+            if [ "$fmt" = "tmux" ]; then
+                printf '#[fg=green]✔#[default] %s ws:%s%s' \
+                    "${topic_summary:-—}" "$n_clients" "$pxy_seg"
+            else
+                local n_topics
+                n_topics=$(printf '%s' "$snap" | jq -r '.topics | length')
+                printf 'topics:%s clients:%s%s\n' "$n_topics" "$n_clients" "$pxy_seg"
+            fi
+            ;;
+        tui)
+            local py_bin="${RCLIPBOARD_PYTHON:-python3}"
+            local pythonpath="${PYTHONPATH:-}"
+            if [ "${TRANSPORT:-}" = "uds" ] && [ -n "${UDS_PATH:-}" ]; then
+                PYTHONPATH="$pythonpath" exec "$py_bin" -c \
+                    "from rclipboard.monitor import main; main('http://localhost', uds_path='${UDS_PATH}')"
+            else
+                PYTHONPATH="$pythonpath" exec "$py_bin" -c \
+                    "from rclipboard.monitor import main; main('${BASE}')"
+            fi
+            ;;
+        *)
+            echo "monitor subcommands: snapshot | status [--format tmux|plain] | tui" >&2
+            exit 2 ;;
+    esac
+}
+
 # ── dispatch ──────────────────────────────────────────────────────────────────
 case "$mode" in
     put|clip)   call_put ;;
@@ -698,5 +759,6 @@ case "$mode" in
     status)     call_status ;;
     topics)     call_topics ;;
     health)     call_health ;;
+    monitor)    call_monitor "$@" ;;
     *)          echo "unknown subcommand: $mode" >&2; usage; exit 2 ;;
 esac

@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import datetime
 import hashlib
 import os
+import time
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
@@ -48,6 +50,57 @@ if hasattr(get_logger(__name__), "trace"):
 
 _topic_data_to_clipboard_item = topic_data_to_clipboard_item
 _clipboard_item_to_topic_data = clipboard_item_to_topic_data
+
+
+def _build_monitor_snapshot(app: FastAPI) -> dict:
+    from rclipboard.proxy import get_proxy_status
+    main = app.state.main
+    now = time.monotonic()
+    ts_utc = datetime.datetime.now(datetime.timezone.utc).isoformat()
+
+    clients = []
+    for iface, ci in main.client_info.items():
+        connected_ago = round(now - ci.connected_at, 3)
+        clients.append({
+            "conn_id": ci.conn_id,
+            "kind": ci.kind,
+            "addr": ci.addr,
+            "app": ci.app,
+            "connected_ago": connected_ago,
+            "topics": sorted(ci.topics),
+            "put_count": ci.put_count,
+            "get_count": ci.get_count,
+            "notify_count": ci.notify_count,
+            "last_put_ago": round(now - ci.last_put_at, 3) if ci.last_put_at else None,
+            "last_get_ago": round(now - ci.last_get_at, 3) if ci.last_get_at else None,
+            "last_notify_ago": round(now - ci.last_notify_at, 3) if ci.last_notify_at else None,
+        })
+
+    topics = []
+    for tm in main.topic_meta.values():
+        stored_ago = round(now - tm.stored_at, 3)
+        notified = {cid: round(now - t, 3) for cid, t in tm.notified_clients.items()}
+        topics.append({
+            "topic": tm.topic,
+            "size": tm.size,
+            "stored_ago": stored_ago,
+            "stored_at_utc": tm.stored_at_utc,
+            "source_id": tm.source_id,
+            "source_app": tm.source_app,
+            "source_addr": tm.source_addr,
+            "get_count": tm.get_count,
+            "notify_count": tm.notify_count,
+            "notified_clients_ago": notified,
+            "last_get_ago": round(now - tm.last_get_at, 3) if tm.last_get_at else None,
+            "last_get_by": tm.last_get_by,
+        })
+
+    return {
+        "ts_utc": ts_utc,
+        "clients": clients,
+        "topics": topics,
+        "proxy": get_proxy_status(app),
+    }
 
 
 async def _http_exception_handler(_request: Request,
@@ -197,9 +250,43 @@ def install_module(app: FastAPI):
     async def _post_clip_put(body: ClipPutParams,
                              request: Request) -> ClipPutResult:
         info(f"request from: {request.client} headers: {request.headers}")
+        client = request.client
+        meta_app = str(body.meta["app"]) if body.meta and body.meta.get("app") else None
+        if client and client.host:
+            conn_id = f"http:{client.host}:{client.port}"
+        else:
+            conn_id = f"http:{meta_app}" if meta_app else "http:local"
         items: list[ClipboardItem] = []
         for item in body.items:
             topic_data = _clipboard_item_to_topic_data(item, meta=body.meta)
-            await enqueue_topic_data(app, data=topic_data, source=None)
+            await enqueue_topic_data(app, data=topic_data, source=None,
+                                     monitor_conn_id=conn_id,
+                                     monitor_app=meta_app)
             items.append(_topic_data_to_clipboard_item(topic_data))
         return ClipPutResult(items=items)
+
+    @app.get("/v1/monitor.snapshot")
+    async def _monitor_snapshot(request: Request):
+        info(f"request from: {request.client}")
+        return _build_monitor_snapshot(app)
+
+    @app.websocket("/v1/monitor.stream")
+    async def _monitor_stream(ws: WebSocket):
+        await ws.accept()
+        main = app.state.main
+        q = main.subscribe_monitor()
+        try:
+            await ws.send_json({"kind": "snapshot", "data": _build_monitor_snapshot(app)})
+            while True:
+                event = await q.get()
+                await ws.send_json({
+                    "kind": event.kind.value,
+                    "ts_utc": event.ts_utc,
+                    "conn_id": event.conn_id,
+                    "topic": event.topic,
+                    "data": event.data,
+                })
+        except WebSocketDisconnect:
+            pass
+        finally:
+            main.unsubscribe_monitor(q)

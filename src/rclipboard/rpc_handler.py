@@ -117,7 +117,8 @@ class RPCHandler(BidirectionalInterface):
     async def _handle_clip_get(
             self, request: JSONRPCRequestMessage) -> ClipGetResult:
         params = ClipGetParams.model_validate(request.params or {})
-        content = await enqueue_request_topic(self.app, params.topic)
+        content = await enqueue_request_topic(self.app, params.topic,
+                                              requester=self)
         if content is None:
             raise RPCMethodError(1001, "Topic not found",
                                  {"topic": params.topic})

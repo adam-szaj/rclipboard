@@ -1,2 +1,5 @@
 Session.vim
 __pycache__/
+.pyre/
+resume.claude
+claude.txt

@@ -13,9 +13,13 @@ from fastapi import FastAPI
 from rclipboard.log import get_logger
 from rclipboard.types import (
     BidirectionalInterface,
+    ClientInfo,
     Interface,
     InternalTopicData,
+    MonitorEvent,
+    MonitorEventKind,
     TopicData,
+    TopicMeta,
 )
 
 logger: Logger = get_logger(__name__)
@@ -96,13 +100,16 @@ class GetTopicData(SerialCall[InternalTopicData | None]):
         self,
         topic: str,
         future: asyncio.Future[InternalTopicData | None] | None,
+        requester: "Interface | None" = None,
     ):
         super().__init__(future)
         self.topic: str = topic
+        self.requester: "Interface | None" = requester
 
     @override
     async def do_call(self, app: "AppState") -> InternalTopicData | None:
-        item: ItemType = await app.process_get_item("topic", self.topic)
+        item: ItemType = await app.process_get_item("topic", self.topic,
+                                                    self.requester)
         if item is None:
             return None
         assert isinstance(item, InternalTopicData)
@@ -129,8 +136,36 @@ class AppState:
         self.notification_lock = asyncio.Lock()
         self.public_keys: dict[str, dict] = {}  # age1pubkey → {public_key, label, key_id}
         self._background_tasks: set[asyncio.Task] = set()
+        # monitoring
+        self.client_info: dict[Interface, ClientInfo] = {}
+        self.topic_meta: dict[str, TopicMeta] = {}
+        self._monitor_subs: set[asyncio.Queue[MonitorEvent]] = set()
         self.dispatcher_task: asyncio.Task[None] = asyncio.create_task(
             self.dispatcher(), name="dispatcher")
+
+    # ── Monitor event bus ─────────────────────────────────────────────────────
+
+    def subscribe_monitor(self) -> "asyncio.Queue[MonitorEvent]":
+        q: asyncio.Queue[MonitorEvent] = asyncio.Queue(maxsize=200)
+        self._monitor_subs.add(q)
+        return q
+
+    def unsubscribe_monitor(self, q: "asyncio.Queue[MonitorEvent]") -> None:
+        self._monitor_subs.discard(q)
+
+    def _emit_monitor(self, event: MonitorEvent) -> None:
+        for q in self._monitor_subs:
+            try:
+                q.put_nowait(event)
+            except asyncio.QueueFull:
+                pass  # slow consumer drops events, never block the dispatcher
+
+    @staticmethod
+    def _utcnow() -> str:
+        import datetime
+        return datetime.datetime.now(datetime.timezone.utc).isoformat()
+
+    # ── Client lifecycle ──────────────────────────────────────────────────────
 
     def subscribe_client(self, client: Interface,
                          topics: list[str]) -> dict[str, TopicData]:
@@ -142,6 +177,16 @@ class AppState:
             content = self.topic_content.get(topic)
             if content:
                 contents[topic] = content.data
+        ci = self.client_info.get(client)
+        if ci:
+            ci.topics.update(topics)
+        self._emit_monitor(MonitorEvent(
+            kind=MonitorEventKind.CLIENT_SUBSCRIBED,
+            ts=asyncio.get_event_loop().time(),
+            ts_utc=self._utcnow(),
+            conn_id=ci.conn_id if ci else None,
+            data={"topics": list(topics)},
+        ))
         self._emit_runtime_state_change("subscriptions")
         return contents
 
@@ -153,16 +198,42 @@ class AppState:
             subs.discard(client)
             if not subs:
                 del self.subs[topic]
+        ci = self.client_info.get(client)
+        if ci:
+            ci.topics.difference_update(topics)
         self._emit_runtime_state_change("subscriptions")
 
     def register_client(self, client: Interface):
+        import time as _time
         self.clients.append(client)
         if isinstance(client, BidirectionalInterface):
             client.start_drainer()
+        ci = _make_client_info(client)
+        self.client_info[client] = ci
+        self._emit_monitor(MonitorEvent(
+            kind=MonitorEventKind.CLIENT_CONNECTED,
+            ts=_time.monotonic(),
+            ts_utc=self._utcnow(),
+            conn_id=ci.conn_id,
+            data={"kind": ci.kind, "addr": ci.addr},
+        ))
         self._emit_runtime_state_change("clients")
 
     def unregister_client(self, client: Interface):
+        import time as _time
         self.clients.remove(client)
+        ci = self.client_info.pop(client, None)
+        # remove from notified_clients in all topic_meta
+        if ci:
+            for tm in self.topic_meta.values():
+                tm.notified_clients.pop(ci.conn_id, None)
+        self._emit_monitor(MonitorEvent(
+            kind=MonitorEventKind.CLIENT_DISCONNECTED,
+            ts=_time.monotonic(),
+            ts_utc=self._utcnow(),
+            conn_id=ci.conn_id if ci else None,
+            data={},
+        ))
         self._emit_runtime_state_change("clients")
 
     def get_health(self) -> 'HealthResult':
@@ -236,12 +307,15 @@ class AppState:
         self.topic_content[topic_data.topic] = topic_data
 
     def _dispatch_data_item(self, topic_data: InternalTopicData) -> None:
+        import time as _time
         subs: set[Interface] | None = self.subs.get(topic_data.topic)
         if not subs:
             return
         source = topic_data.source
         encrypted = topic_data.data.meta.get("encrypted") is True
         val_len = len(topic_data.data.value.value.encode())
+        now = _time.monotonic()
+        tm = self.topic_meta.get(topic_data.topic)
         for conn in subs:
             if isinstance(conn, BidirectionalInterface):
                 if source and conn is source:
@@ -261,6 +335,22 @@ class AppState:
                         "fetch_url": f"/v1/clip/{data.topic}",
                     })
                 conn.deliver(data)
+                # monitoring counters
+                ci = self.client_info.get(conn)
+                if ci:
+                    ci.notify_count += 1
+                    ci.last_notify_at = now
+                if tm:
+                    tm.notify_count += 1
+                    tm.notified_clients[ci.conn_id if ci else repr(conn)] = now
+                self._emit_monitor(MonitorEvent(
+                    kind=MonitorEventKind.TOPIC_NOTIFY,
+                    ts=now,
+                    ts_utc=self._utcnow(),
+                    conn_id=ci.conn_id if ci else None,
+                    topic=topic_data.topic,
+                    data={},
+                ))
 
     async def _notify_topic_data(self, topic_data: InternalTopicData) -> None:
         self._dispatch_data_item(topic_data)
@@ -323,11 +413,44 @@ class AppState:
             await self._notify_topic_data(topic_data)
 
     async def process_put_item(self, topic_data: InternalTopicData):
-        # Update content store and fan-out
+        import time as _time
         await self._process_data_item(topic_data)
+        # monitoring: update TopicMeta and ClientInfo
+        now = _time.monotonic()
+        source = topic_data.source
+        ci = self.client_info.get(source) if source else None
+        if ci:
+            ci.put_count += 1
+            ci.last_put_at = now
+            if topic_data.data.meta.get("app"):
+                ci.app = str(topic_data.data.meta["app"])
+        val = topic_data.data.value.value
+        size = len(val.encode()) if not topic_data.data.stub else None
+        eff_conn_id = ci.conn_id if ci else topic_data.monitor_conn_id
+        eff_app = (ci.app if ci else None) or topic_data.monitor_app or \
+                  (str(topic_data.data.meta["app"]) if topic_data.data.meta.get("app") else None)
+        self.topic_meta[topic_data.topic] = TopicMeta(
+            topic=topic_data.topic,
+            size=size,
+            stored_at=now,
+            stored_at_utc=topic_data.stored_at_utc or self._utcnow(),
+            source_id=eff_conn_id,
+            source_app=eff_app,
+            source_addr=ci.addr if ci else None,
+        )
+        self._emit_monitor(MonitorEvent(
+            kind=MonitorEventKind.TOPIC_PUT,
+            ts=now,
+            ts_utc=self._utcnow(),
+            conn_id=eff_conn_id,
+            topic=topic_data.topic,
+            data={"size": size, "app": eff_app},
+        ))
         await self._schedule_notification(topic_data)
 
-    async def process_get_item(self, subject: str, topic: str) -> ItemType:
+    async def process_get_item(self, subject: str, topic: str,
+                               requester: "Interface | None" = None) -> ItemType:
+        import time as _time
         info(f"subject: '{subject}' topic: '{topic}'")
         content = None
         if subject == "topic":
@@ -336,6 +459,26 @@ class AppState:
             debug(
                 f"found content for topic '{topic}': '{content}' from: '{self.topic_content}'"
             )
+            # monitoring counters for clip.get
+            now = _time.monotonic()
+            ci = self.client_info.get(requester) if requester else None
+            if ci:
+                ci.get_count += 1
+                ci.last_get_at = now
+            tm = self.topic_meta.get(topic)
+            if tm and content:
+                tm.get_count += 1
+                tm.last_get_at = now
+                tm.last_get_by = ci.conn_id if ci else None
+            if content:
+                self._emit_monitor(MonitorEvent(
+                    kind=MonitorEventKind.TOPIC_GET,
+                    ts=now,
+                    ts_utc=self._utcnow(),
+                    conn_id=ci.conn_id if ci else None,
+                    topic=topic,
+                    data={},
+                ))
         elif subject == "topics":
             content = list(self.topic_content.keys())
         else:
@@ -351,13 +494,17 @@ class AppState:
         self.bus.task_done()
         debug("process_queue: done")
 
-    async def enqueue_request(self, action: str,
-                              data: Any) -> TopicData | list[str] | None:
+    async def enqueue_request(
+        self,
+        action: str,
+        data: Any,
+        requester: "Interface | None" = None,
+    ) -> TopicData | list[str] | None:
         if action.startswith("get:"):
             if action.endswith(":topic"):
                 assert isinstance(data, str)
                 await self.flush_topic_notification(data)
-                req = GetTopicData(data, None)
+                req = GetTopicData(data, None, requester=requester)
                 debug(f"put request: {req}")
                 await self.bus.put(req)
                 debug("wait for future")
@@ -407,10 +554,14 @@ def unsubscribe_client(app: FastAPI, client: Interface, topics: list[str]):
     main.unsubscribe_client(client, topics)
 
 
-async def enqueue_request_topic(app: FastAPI, topic: str) -> TopicData | None:
+async def enqueue_request_topic(
+    app: FastAPI,
+    topic: str,
+    requester: Interface | None = None,
+) -> TopicData | None:
     assert isinstance(app.state.main, AppState)
     main: AppState = app.state.main
-    result = await main.enqueue_request("get:topic", topic)
+    result = await main.enqueue_request("get:topic", topic, requester=requester)
     if result and isinstance(result, TopicData):
         return result
     return None
@@ -425,9 +576,47 @@ async def enqueue_request_topics(app: FastAPI) -> list[str] | None:
     return result
 
 
+def _make_client_info(client: Interface) -> ClientInfo:
+    import time as _time
+    from rclipboard.proxy import ProxyClient
+    from rclipboard.xsel import XselInterface
+    if isinstance(client, ProxyClient):
+        kind = "proxy"
+        addr = client.url if hasattr(client, "url") else None
+    elif isinstance(client, XselInterface):
+        kind = "xsel"
+        addr = None
+    elif client.__class__.__name__ == "FIFOTransport":
+        kind = "fifo"
+        addr = None
+    elif client.__class__.__name__ == "WSServerConnection":
+        kind = "ws"
+        ws = getattr(client, "ws", None)
+        addr = (f"{ws.client.host}:{ws.client.port}"
+                if ws and ws.client else None)
+    elif client.__class__.__name__ == "UDSServerConnection":
+        kind = "uds"
+        addr = None
+    else:
+        kind = "unknown"
+        addr = None
+    conn_id = f"{kind}:{addr}" if addr else f"{kind}:{id(client):x}"
+    return ClientInfo(
+        conn_id=conn_id,
+        kind=kind,
+        addr=addr,
+        app=None,
+        connected_at=_time.monotonic(),
+    )
+
+
 async def enqueue_topic_data(app: FastAPI, data: TopicData,
-                             source: Interface | None) -> InternalTopicData:
-    internal_topic_data = InternalTopicData(data=data, source=source)
+                             source: Interface | None,
+                             monitor_conn_id: str | None = None,
+                             monitor_app: str | None = None) -> InternalTopicData:
+    internal_topic_data = InternalTopicData(data=data, source=source,
+                                            monitor_conn_id=monitor_conn_id,
+                                            monitor_app=monitor_app)
     assert isinstance(app.state.main, AppState)
     main: AppState = app.state.main
     await main.enqueue_topic_data(internal_topic_data)
@@ -435,7 +624,11 @@ async def enqueue_topic_data(app: FastAPI, data: TopicData,
 
 
 async def enqueue_topic_data_nowait(app: FastAPI, data: TopicData,
-                                    source: Interface | None):
-    internal_topic_data = InternalTopicData(data=data, source=source)
+                                    source: Interface | None,
+                                    monitor_conn_id: str | None = None,
+                                    monitor_app: str | None = None):
+    internal_topic_data = InternalTopicData(data=data, source=source,
+                                            monitor_conn_id=monitor_conn_id,
+                                            monitor_app=monitor_app)
     await app.state.main.enqueue_topic_data_nowait(internal_topic_data)
     return internal_topic_data

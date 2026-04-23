@@ -150,6 +150,9 @@ class XselInterface(BidirectionalInterface):
         self.selection_states: dict[str, XselState] = {}
         self.task: a.Task | None = None
         self.last_error: str | None = None
+        self._topic_locks: dict[str, a.Lock] = {
+            topic: a.Lock() for topic in TOPIC_TO_XSEL
+        }
 
         for topic, opt in TOPIC_TO_XSEL.items():
             self.selection_states[topic] = XselState(topic, opt)
@@ -196,7 +199,6 @@ class XselInterface(BidirectionalInterface):
         value: str = data.value
         value_type: str = data.value_type
         value_encoding: str = data.value_encoding
-        # compute bytes
         data_bytes = b""
         if value_type == "binary":
             if value_encoding == "base64":
@@ -207,28 +209,25 @@ class XselInterface(BidirectionalInterface):
             assert isinstance(value, str)
             data_bytes = value.encode()
 
-        encrypted = item.meta.get("encrypted", False) is True
-        if XSEL_ENCRYPT and encrypted:
-            # data_bytes is raw age ciphertext; decrypt via rclipctl exec --decrypt-input
-            await _exec(
-                RCLIPCTL_PATH,
-                "exec", "--decrypt-input",
-                "--", str(XSEL_PATH), "-n", "-i", opt,
-                input_data=data_bytes,
-                timeout=2.5,
-            )
-        else:
-            await write_selection(opt, data_bytes, timeout=2.5)
+        async with self._topic_locks[topic]:
+            ts = utc_timestamp()
+            sel_state = self.selection_states[topic]
+            sel_state.applied = data_bytes
+            sel_state.applied_ts = ts
+            sel_state.seen = data_bytes
+            sel_state.seen_ts = ts
 
-        # remember last applied and seen
-        ts = utc_timestamp()
-
-        sel_state = self.selection_states[topic]
-
-        sel_state.applied = data_bytes
-        sel_state.applied_ts = ts
-        sel_state.seen = data_bytes
-        sel_state.seen_ts = ts
+            encrypted = item.meta.get("encrypted", False) is True
+            if XSEL_ENCRYPT and encrypted:
+                await _exec(
+                    RCLIPCTL_PATH,
+                    "exec", "--decrypt-input",
+                    "--", str(XSEL_PATH), "-n", "-i", opt,
+                    input_data=data_bytes,
+                    timeout=2.5,
+                )
+            else:
+                await write_selection(opt, data_bytes, timeout=2.5)
 
     async def read_items(self):
         for topic, state in self.selection_states.items():
@@ -239,19 +238,18 @@ class XselInterface(BidirectionalInterface):
                 debug(f"xsel read/clip error: {e}", exc_info=True)
 
     async def read_item(self, topic: str, state: XselState):
-        # On timeout or after writes, consider polling
         state.poll_ts = utc_timestamp()
         opt = state.opt
         current = await read_selection(opt, timeout=1)
 
-        if current == state.seen:
-            return
+        async with self._topic_locks[topic]:
+            if current == state.seen:
+                return
 
-        # update last seen immediately
-        state.seen = current
-        state.seen_ts = state.poll_ts
-        if current == state.applied:
-            return
+            state.seen = current
+            state.seen_ts = state.poll_ts
+            if current == state.applied:
+                return
 
         meta: dict = {"app": "xsel"}
         if XSEL_ENCRYPT:
