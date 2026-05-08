@@ -1,0 +1,297 @@
+#!/usr/bin/env bash
+# Interactive configuration wizard for rclipboard.
+# Generates ~/.config/rclipboard/config.toml and optionally creates TLS certs
+# and age encryption keypairs. Safe to re-run.
+set -euo pipefail
+
+APP_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/rclipboard"
+WIZARD_DIR="$(cd "$(dirname "$0")" && pwd)"
+GENCERT="${WIZARD_DIR}/gencert.sh"
+
+# ── helpers ───────────────────────────────────────────────────────────────────
+
+# prompt_yn "Question" "y|n"  →  returns 0=yes 1=no
+prompt_yn() {
+    local q="$1" def="$2" reply hint
+    [[ "$def" == "y" ]] && hint="(Y/n)" || hint="(y/N)"
+    read -r -p "$q $hint: " reply || true
+    reply="${reply:-$def}"
+    [[ "${reply,,}" == "y" ]]
+}
+
+# prompt_val "Prompt" "default"  →  prints chosen value
+prompt_val() {
+    local p="$1" def="$2" reply
+    read -r -p "$p [$def]: " reply || true
+    printf '%s' "${reply:-$def}"
+}
+
+section() { echo; echo "── $* ──────────────────────────────────────────────"; }
+
+# ── state defaults ────────────────────────────────────────────────────────────
+SERVER_ENDPOINT='uds://${XDG_RUNTIME_DIR}/rclipboard/uds.sock'
+CLIENT_TRANSPORT="uds"
+DO_TLS=0
+
+XSEL_ENABLED="false"
+XSEL_PATH="/usr/bin/xsel"
+XSEL_INTERVAL=250
+XSEL_ENCRYPT="false"
+
+AGE_KEY_FILE="$APP_DIR/age_key.txt"
+AGE_PUB_FILE="$APP_DIR/age_key.pub"
+
+SSL_CERTFILE=""
+SSL_KEYFILE=""
+
+PROXY_ENABLED="false"
+PROXY_UPSTREAM=""
+
+ADMIN_TOKEN=""
+
+# ─────────────────────────────────────────────────────────────────────────────
+echo "rclipboard setup wizard"
+echo "Configuration directory: $APP_DIR"
+mkdir -p "$APP_DIR"
+
+# ── Step 1: Transport ─────────────────────────────────────────────────────────
+section "Step 1: Transport / Endpoint"
+echo "  1) UDS   – Unix Domain Socket (recommended for local use)"
+echo "  2) TCP   – plain TCP (host:port)"
+echo "  3) HTTPS – TCP with TLS"
+read -r -p "Choice [1]: " _choice || true
+_choice="${_choice:-1}"
+
+case "$_choice" in
+    2)
+        _host=$(prompt_val "Host" "127.0.0.1")
+        _port=$(prompt_val "Port" "8989")
+        SERVER_ENDPOINT="${_host}:${_port}"
+        CLIENT_TRANSPORT="tcp"
+        DO_TLS=0
+        ;;
+    3)
+        _host=$(prompt_val "Host" "127.0.0.1")
+        _port=$(prompt_val "Port" "8989")
+        SERVER_ENDPOINT="https://${_host}:${_port}"
+        CLIENT_TRANSPORT="tcp"
+        DO_TLS=1
+        ;;
+    *)
+        SERVER_ENDPOINT='uds://${XDG_RUNTIME_DIR}/rclipboard/uds.sock'
+        CLIENT_TRANSPORT="uds"
+        DO_TLS=0
+        ;;
+esac
+echo "  Endpoint: $SERVER_ENDPOINT"
+
+# ── Step 2: xsel ─────────────────────────────────────────────────────────────
+section "Step 2: X11 clipboard integration (xsel)"
+if command -v xsel >/dev/null 2>&1; then
+    _xsel_default="y"
+    echo "  xsel found in PATH."
+else
+    _xsel_default="n"
+    echo "  xsel not found in PATH."
+fi
+
+if prompt_yn "Enable xsel X11 clipboard polling?" "$_xsel_default"; then
+    XSEL_ENABLED="true"
+    XSEL_PATH=$(prompt_val "xsel binary path" "/usr/bin/xsel")
+    XSEL_INTERVAL=$(prompt_val "Poll interval (ms)" "250")
+    if prompt_yn "  Encrypt X11 clipboard data via rclipctl exec? (requires age + registered keys)" "n"; then
+        XSEL_ENCRYPT="true"
+    fi
+fi
+
+# ── Step 3: Age keypair ───────────────────────────────────────────────────────
+section "Step 3: Age encryption keypair"
+if [ -f "$AGE_KEY_FILE" ]; then
+    echo "  Key already exists at $AGE_KEY_FILE"
+    echo "  Public key: $(cat "$AGE_PUB_FILE" 2>/dev/null || echo '(pub file missing)')"
+else
+    if prompt_yn "Generate age encryption keypair?" "n"; then
+        if ! command -v age-keygen >/dev/null 2>&1; then
+            echo "  WARNING: age-keygen not found. Install age: https://github.com/FiloSottile/age#installation"
+            echo "  Skipping key generation."
+        else
+            age-keygen -o "$AGE_KEY_FILE" 2>/dev/null
+            chmod 600 "$AGE_KEY_FILE"
+            grep '^# public key:' "$AGE_KEY_FILE" | awk '{print $NF}' > "$AGE_PUB_FILE"
+            echo "  Generated: $AGE_KEY_FILE"
+            echo "  Public key: $(cat "$AGE_PUB_FILE")"
+        fi
+    fi
+fi
+
+# ── Step 4: TLS certificate ───────────────────────────────────────────────────
+if [ "$DO_TLS" -eq 1 ]; then
+    section "Step 4: TLS certificate"
+    if prompt_yn "Generate self-signed TLS certificate?" "y"; then
+        _gencert=""
+        if [ -x "$GENCERT" ]; then
+            _gencert="$GENCERT"
+        elif command -v gencert.sh >/dev/null 2>&1; then
+            _gencert="gencert.sh"
+        fi
+
+        if [ -z "$_gencert" ]; then
+            echo "  WARNING: gencert.sh not found."
+            echo "  Run manually:"
+            echo "    gencert.sh --san --key $APP_DIR/key.pem --cert $APP_DIR/cert.pem"
+        else
+            "$_gencert" --san --key "$APP_DIR/key.pem" --cert "$APP_DIR/cert.pem"
+            SSL_CERTFILE="$APP_DIR/cert.pem"
+            SSL_KEYFILE="$APP_DIR/key.pem"
+            echo "  Certificate: $SSL_CERTFILE"
+            echo "  Key:         $SSL_KEYFILE"
+        fi
+    fi
+fi
+
+# ── Step 5: Proxy mode ────────────────────────────────────────────────────────
+section "Step 5: Proxy mode"
+if prompt_yn "Enable proxy mode (connect to an upstream server)?" "n"; then
+    PROXY_ENABLED="true"
+    echo "  Upstream endpoint format:"
+    echo "    1) UDS"
+    echo "    2) TCP"
+    echo "    3) HTTPS / WSS"
+    read -r -p "  Choice [1]: " _pchoice || true
+    _pchoice="${_pchoice:-1}"
+    case "$_pchoice" in
+        2)
+            _ph=$(prompt_val "  Upstream host" "127.0.0.1")
+            _pp=$(prompt_val "  Upstream port" "8988")
+            PROXY_UPSTREAM="${_ph}:${_pp}"
+            ;;
+        3)
+            _ph=$(prompt_val "  Upstream host" "127.0.0.1")
+            _pp=$(prompt_val "  Upstream port" "8988")
+            PROXY_UPSTREAM="wss://${_ph}:${_pp}"
+            ;;
+        *)
+            PROXY_UPSTREAM='uds://${XDG_RUNTIME_DIR}/rclipboard/upstream.sock'
+            ;;
+    esac
+    echo "  Upstream: $PROXY_UPSTREAM"
+fi
+
+# ── Step 6: Admin token ───────────────────────────────────────────────────────
+section "Step 6: Admin token (for key registry)"
+if prompt_yn "Set an admin token for POST /v1/keys.publish?" "n"; then
+    _has_openssl=0
+    command -v openssl >/dev/null 2>&1 && _has_openssl=1
+
+    echo "  1) Enter token manually"
+    [ "$_has_openssl" -eq 1 ] && echo "  2) Generate random (openssl rand -hex 16)"
+    read -r -p "  Choice [1]: " _tchoice || true
+    _tchoice="${_tchoice:-1}"
+
+    if [ "$_tchoice" = "2" ] && [ "$_has_openssl" -eq 1 ]; then
+        ADMIN_TOKEN=$(openssl rand -hex 16)
+        echo "  Generated token: $ADMIN_TOKEN"
+    else
+        read -r -s -p "  Token: " ADMIN_TOKEN || true
+        echo
+    fi
+fi
+
+# ── Step 7: Write config.toml ─────────────────────────────────────────────────
+section "Step 7: Writing config.toml"
+
+# Protect variables that must stay literal in TOML (config.py expands them at runtime)
+_FIFO_DIR='${XDG_RUNTIME_DIR}/rclipboard'
+
+# Build optional sections as strings to splice in
+_admin_line=""
+if [ -n "$ADMIN_TOKEN" ]; then
+    _admin_line="    admin_token = \"$ADMIN_TOKEN\""
+else
+    _admin_line="    # admin_token = \"\""
+fi
+
+_proxy_upstream_line=""
+if [ "$PROXY_ENABLED" = "true" ]; then
+    _proxy_upstream_line="    upstream_endpoint = \"$PROXY_UPSTREAM\""
+else
+    _proxy_upstream_line="    # upstream_endpoint = \"\""
+fi
+
+_do_write=1
+CONF_FILE="$APP_DIR/config.toml"
+if [ -f "$CONF_FILE" ]; then
+    if ! prompt_yn "config.toml already exists. Overwrite?" "n"; then
+        _do_write=0
+    fi
+fi
+
+_config_content=$(cat <<EOF
+# rclipboard configuration
+# Generated by rclipboard-setup. Edit as needed.
+# See: https://github.com/adam-szaj/rclipboard for documentation.
+
+[server]
+    endpoint = "$SERVER_ENDPOINT"
+    log_level    = "warning"
+    py_log_level = "WARNING"
+    notify_delay_ms = 500
+$_admin_line
+
+[fifo]
+    enabled = true
+    dir = "$_FIFO_DIR"
+    mode = "wo"
+
+[xsel]
+    enabled     = $XSEL_ENABLED
+    path        = "$XSEL_PATH"
+    interval_ms = $XSEL_INTERVAL
+    encrypt     = $XSEL_ENCRYPT
+
+[proxy]
+    enabled = $PROXY_ENABLED
+$_proxy_upstream_line
+
+[ssl]
+    certfile = "$SSL_CERTFILE"
+    keyfile  = "$SSL_KEYFILE"
+
+[client]
+    transport = "$CLIENT_TRANSPORT"
+EOF
+)
+
+echo
+echo "Preview:"
+echo "─────────────────────────────────────────────────────"
+echo "$_config_content"
+echo "─────────────────────────────────────────────────────"
+
+if [ "$_do_write" -eq 1 ]; then
+    printf '%s\n' "$_config_content" > "$CONF_FILE"
+    echo "Written: $CONF_FILE"
+fi
+
+# ── Step 8: Summary ───────────────────────────────────────────────────────────
+section "Setup complete"
+echo "  Transport:  $SERVER_ENDPOINT"
+echo "  xsel:       $XSEL_ENABLED"
+if [ -f "$AGE_PUB_FILE" ]; then
+    echo "  Age key:    $AGE_KEY_FILE (public: $(cat "$AGE_PUB_FILE"))"
+else
+    echo "  Age key:    not configured"
+fi
+if [ -n "$SSL_CERTFILE" ]; then
+    echo "  TLS cert:   $SSL_CERTFILE"
+else
+    echo "  TLS:        not configured"
+fi
+echo "  Proxy:      $PROXY_ENABLED"
+echo "  Admin token: $([ -n "$ADMIN_TOKEN" ] && echo "set" || echo "not set")"
+echo
+echo "Next steps:"
+echo "  Start server:          ~/.config/rclipboard/venv/bin/rclipboard"
+echo "  Test connectivity:     rclipctl health"
+echo "  Shell integration:     source ~/.bash.d/rclipboard.bash  (add to ~/.bashrc)"
+echo "  Add ~/bin to PATH:     export PATH=\"\$HOME/bin:\$PATH\""

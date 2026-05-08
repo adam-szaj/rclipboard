@@ -21,7 +21,7 @@ RCLIPBOARD_PY_LOG_LEVEL := INFO
 IMAGE ?= rclipboard:latest
 TUNEL_TEST_IMAGE ?= rcliptunel-test:latest
 
-.PHONY: help install run run-dev run-uds run-https run-proxy run-dev-proxy cert cert-san health status topics docker-build docker-run docker-run-proxy docker-build-tunel-test plugin-install plugin-uninstall plugin-reload plugin-demo smoke proxy-smoke test test-functional test-integration test-http test-ws test-proxy-integration test-tunel test-https test-wss test-ssl-proxy-integration test-ssl test-soak test-soak-full systemd-user-install systemd-user-enable systemd-user-disable nvim-plugin-install nvim-plugin-pack
+.PHONY: help install run run-dev run-uds run-https run-proxy run-dev-proxy cert cert-san health status topics docker-build docker-run docker-run-proxy docker-build-tunel-test plugin-install plugin-uninstall plugin-reload plugin-demo smoke proxy-smoke test test-functional test-integration test-http test-ws test-proxy-integration test-tunel test-https test-wss test-ssl-proxy-integration test-ssl test-soak test-soak-full systemd-user-install systemd-user-enable systemd-user-disable nvim-plugin-install nvim-plugin-pack install-no-systemd setup-wizard
 
 help:
 	@echo "Targets:"
@@ -56,6 +56,8 @@ help:
 	@echo "  systemd-user-install - install user unit + venv + scripts + config"
 	@echo "  systemd-user-enable  - enable & start rclipboard.service"
 	@echo "  systemd-user-disable - disable rclipboard.service"
+	@echo "  install-no-systemd   - install venv, scripts, config (no systemd)"
+	@echo "  setup-wizard         - run interactive rclipboard configuration wizard"
 	@echo "  nvim-plugin-install  - luarocks make (local) nvim-rclipboard"
 	@echo "  nvim-plugin-pack     - luarocks pack rock for nvim-rclipboard"
 
@@ -275,3 +277,9 @@ nvim-plugin-install:
 
 nvim-plugin-pack:
 	cd nvim-rclipboard && luarocks pack nvim-rclipboard-0.1.0-1.rockspec
+
+install-no-systemd:
+	bash scripts/install.sh "$(CURDIR)"
+
+setup-wizard:
+	~/.config/rclipboard/bin/rclipboard-setup

@@ -250,6 +250,8 @@ class XselInterface(BidirectionalInterface):
             state.seen_ts = state.poll_ts
             if current == state.applied:
                 return
+            if not current:
+                return
 
         meta: dict = {"app": "xsel"}
         if XSEL_ENCRYPT:
