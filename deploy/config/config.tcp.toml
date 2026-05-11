@@ -1,0 +1,34 @@
+# rclipboard configuration — TCP endpoint template
+# Deployed by scripts/deploy.sh for hosts with endpoint_type=tcp
+#
+# To override for a specific host, create deploy/config/<hostname>.toml
+
+[server]
+    endpoint        = "127.0.0.1:8989"
+    log_level       = "warning"
+    py_log_level    = "WARNING"
+    notify_delay_ms = 500
+    # admin_token = ""
+
+[fifo]
+    enabled = false
+    dir     = "${XDG_RUNTIME_DIR}/rclipboard"
+    mode    = "wo"
+
+[xsel]
+    enabled     = false
+    path        = "/usr/bin/xsel"
+    interval_ms = 250
+    encrypt     = false
+
+[proxy]
+    enabled = false
+    # upstream_endpoint = ""
+
+[ssl]
+    certfile = ""
+    keyfile  = ""
+
+[client]
+    transport = "tcp"
+    endpoint  = "127.0.0.1:8989"

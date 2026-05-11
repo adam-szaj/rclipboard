@@ -20,8 +20,9 @@ RCLIPBOARD_PY_LOG_LEVEL := INFO
 # Docker
 IMAGE ?= rclipboard:latest
 TUNEL_TEST_IMAGE ?= rcliptunel-test:latest
+DEPLOY_TEST_IMAGE ?= rclipboard-deploy-test:latest
 
-.PHONY: help install run run-dev run-uds run-https run-proxy run-dev-proxy cert cert-san health status topics docker-build docker-run docker-run-proxy docker-build-tunel-test plugin-install plugin-uninstall plugin-reload plugin-demo smoke proxy-smoke test test-functional test-integration test-http test-ws test-proxy-integration test-tunel test-https test-wss test-ssl-proxy-integration test-ssl test-soak test-soak-full systemd-user-install systemd-user-enable systemd-user-disable nvim-plugin-install nvim-plugin-pack install-no-systemd setup-wizard
+.PHONY: help install run run-dev run-uds run-https run-proxy run-dev-proxy cert cert-san health status topics docker-build docker-run docker-run-proxy docker-build-tunel-test plugin-install plugin-uninstall plugin-reload plugin-demo smoke proxy-smoke test test-functional test-integration test-http test-ws test-proxy-integration test-tunel test-https test-wss test-ssl-proxy-integration test-ssl test-soak test-soak-full systemd-user-install systemd-user-enable systemd-user-disable nvim-plugin-install nvim-plugin-pack install-no-systemd setup-wizard deploy deploy-dry docker-build-deploy-test test-deploy
 
 help:
 	@echo "Targets:"
@@ -58,6 +59,10 @@ help:
 	@echo "  systemd-user-disable - disable rclipboard.service"
 	@echo "  install-no-systemd   - install venv, scripts, config (no systemd)"
 	@echo "  setup-wizard         - run interactive rclipboard configuration wizard"
+	@echo "  deploy               - deploy to all hosts in deploy/hosts"
+	@echo "  deploy-dry           - dry-run deploy (print commands only)"
+	@echo "  docker-build-deploy-test - build deploy/install integration test image"
+	@echo "  test-deploy          - deploy + install + wizard integration tests (requires docker)"
 	@echo "  nvim-plugin-install  - luarocks make (local) nvim-rclipboard"
 	@echo "  nvim-plugin-pack     - luarocks pack rock for nvim-rclipboard"
 
@@ -263,6 +268,13 @@ test-tunel:
 	PYTHONPATH=src RCLIPBOARD_TUNEL_TEST_IMAGE=$(TUNEL_TEST_IMAGE) \
 	.venv/bin/python -m unittest tests.test_integration_tunel -v
 
+docker-build-deploy-test:
+	docker build -t $(DEPLOY_TEST_IMAGE) tests/docker/deploy/
+
+test-deploy:
+	PYTHONPATH=src RCLIPBOARD_DEPLOY_TEST_IMAGE=$(DEPLOY_TEST_IMAGE) \
+	.venv/bin/python -m unittest tests.test_integration_deploy -v
+
 systemd-user-install:
 	REPO_DIR="$(CURDIR)" ./scripts/install-systemd-user.sh
 
@@ -283,3 +295,9 @@ install-no-systemd:
 
 setup-wizard:
 	~/.config/rclipboard/bin/rclipboard-setup
+
+deploy:
+	./scripts/deploy.sh
+
+deploy-dry:
+	./scripts/deploy.sh --dry-run

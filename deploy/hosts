@@ -1,0 +1,19 @@
+# rclipboard deploy inventory
+#
+# Format (whitespace-delimited):
+#   hostname    init_system    endpoint_type    [extra_ssh_opts...]
+#
+# hostname       — SSH target: bare hostname (uses ~/.ssh/config), user@host, or IP
+# init_system    — "systemd" or "none"
+# endpoint_type  — "uds" (Unix socket) or "tcp" (127.0.0.1:8989)
+# extra_ssh_opts — optional, passed verbatim to ssh/scp (e.g. -p 2222, -i ~/.ssh/key)
+#
+# Config template used:
+#   deploy/config/<hostname>.toml  (host-specific override, if it exists)
+#   deploy/config/config.<endpoint_type>.toml  (otherwise)
+#
+# Examples:
+# workstation   systemd   uds
+# devbox        none      tcp   -p 2222
+# raspi         none      uds   -i ~/.ssh/raspi_key
+# pi@192.168.1.5  none    uds   -p 22 -i ~/.ssh/pi_key
