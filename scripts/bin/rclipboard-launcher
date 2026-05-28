@@ -1,0 +1,19 @@
+#!/bin/bash
+
+THIS_SCRIPT=$(realpath $0)
+
+if ! pgrep -x rclipboard >/dev/null; then
+    if test -d ${HOME}/.config/rclipboard ; then
+        if [[ "$1" = "daemonize" ]] ; then
+            $THIS_SCRIPT &
+        else
+            export XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-${HOME}/.local/run}
+            if test -n ${XDG_RUNTIME_DIR} ; then
+                RUNTIME_DIR=${XDG_RUNTIME_DIR}/rclipboard
+                mkdir -p ${RUNTIME_DIR}
+                ~/.config/rclipboard/venv/bin/rclipboard config env  > ${RUNTIME_DIR}/env
+                exec ~/.config/rclipboard/venv/bin/rclipboard &> /dev/null
+            fi
+        fi
+    fi
+fi

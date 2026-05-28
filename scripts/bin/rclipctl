@@ -237,7 +237,9 @@ EOS
 }
 
 # ── load configuration ────────────────────────────────────────────────────────
-_RUNTIME_ENV="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/rclipboard/env"
+export XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-${HOME}/.local/run}
+_RUNTIME_ENV="${XDG_RUNTIME_DIR}/rclipboard/env"
+
 if [ -z "${RCLIP_CONF:-}" ]; then
     if [ -r "$_RUNTIME_ENV" ]; then
         RCLIP_CONF="$_RUNTIME_ENV"
@@ -247,21 +249,21 @@ if [ -z "${RCLIP_CONF:-}" ]; then
 fi
 unset _RUNTIME_ENV
 
+CONFIG_FILE="${CONFIG_FILE:-$HOME/.config/rclipboard/config.toml}"
 if [ -n "$CONFIG_FILE" ]; then
     RCLIPBOARD_BIN="$(find_rclipboard)" || {
         echo "error: rclipboard not found in PATH; cannot load --config" >&2
         exit 1
     }
     # shellcheck disable=SC2046
-    eval "$("$RCLIPBOARD_BIN" config env --config "$CONFIG_FILE")"
-elif [ -r "$RCLIP_CONF" ]; then
+    if pidof rclipboard  &> /dev/null ; then
+        $RCLIPBOARD_BIN config env --config "$CONFIG_FILE" > ${RCLIP_CONF}
+    fi
+fi
+
+if [ -r "$RCLIP_CONF" ]; then
     # shellcheck disable=SC1090
     . "$RCLIP_CONF"
-elif [ -f "$HOME/.config/rclipboard/config.toml" ]; then
-    if RCLIPBOARD_BIN="$(find_rclipboard 2>/dev/null)"; then
-        # shellcheck disable=SC2046
-        eval "$("$RCLIPBOARD_BIN" config env --config "$HOME/.config/rclipboard/config.toml")"
-    fi
 fi
 
 # Apply loaded env vars to local variables

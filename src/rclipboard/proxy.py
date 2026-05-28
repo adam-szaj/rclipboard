@@ -345,15 +345,19 @@ class ProxyClient(RPCHandler):
 
     async def run(self):
         backoff = 1.0
+        error_state = False
         while True:
             try:
                 await self.run_loop()
+                error_state = False
                 backoff = 1.0
             except a.CancelledError:
                 raise
             except Exception as exc:
                 self.last_error = str(exc)
-                warning(f"proxy upstream error: {exc}", exc_info=True)
+                if not error_state:
+                    warning(f"proxy upstream error: {exc}", exc_info=True)
+                    error_state = True
             finally:
                 self.connected = False
                 self.ws = None
