@@ -9,45 +9,29 @@
 #   systemctl --user restart rclipboard.service
 
 [server]
-    # Bind endpoint.  Supported formats:
-    #   "uds://${XDG_RUNTIME_DIR}/rclipboard/uds.sock"  — Unix Domain Socket
-    #   "127.0.0.1:8989"                                 — TCP
-    #   "https://127.0.0.1:8989"                         — HTTPS (needs [ssl])
-    #   "fifo:///path/to/dir"                            — FIFO-only mode
+# Bind endpoint.  Supported formats:
+#   "uds://${XDG_RUNTIME_DIR}/rclipboard/uds.sock"  — Unix Domain Socket
+#   "127.0.0.1:8989"                                 — TCP
+#   "https://127.0.0.1:8989"                         — HTTPS (needs [ssl])
     endpoint = "uds://${XDG_RUNTIME_DIR}/rclipboard/uds.sock"
 
-    # Logging
-    log_level    = "warning"   # uvicorn level: debug | info | warning | error
-    py_log_level = "WARNING"   # Python logging level
-    notify_delay_ms = 500   # clipboard notification debounce (ms)
-
-    # Admin token for key registry (POST /v1/keys.publish).
-    # Leave empty to disable key registration.
-    # admin_token = ""
-
-# Parallel FIFO directory (active alongside HTTP/WS server when set)
-[fifo]
-    enabled = true
-    dir = "${XDG_RUNTIME_DIR}/rclipboard"
-    mode = "wo" # fifo mode wo | rw, fifo 'rw' mode does not guarantee put -> get
-                # consistency and raises a security concern
+# Logging
+log_level    = "debug"   # uvicorn level: debug | info | warning | error
+py_log_level = "DEBUG"   # Python logging level
+notify_delay_ms = 250   # clipboard notification debounce (ms)
 
 # X11 clipboard polling via xsel
 [xsel]
-    enabled      = true
+    enabled              = false
     path         = "/usr/bin/xsel"
     interval_ms  = 250
-    # Encrypt clipboard data captured from X11 via rclipctl exec.
-    # Requires age and rclipctl on PATH, and at least one registered public key.
-    # Default: false (disabled)
-    encrypt      = false
 
 [proxy]
     # Enable proxy mode: connect to an upstream server and replicate topics locally.
-    enabled = false
+    enabled = true
     # Upstream server endpoint — same formats as server.endpoint above.
-    # upstream_endpoint = "127.0.0.1:8988"
-    upstream_endpoint = "uds://${XDG_RUNTIME_DIR}/rclipboard/upstream.sock"
+    upstream_endpoint = "127.0.0.1:8988"
+    # upstream_endpoint = "uds:///run/user/1000/rclipboard/uds.sock"
 
 [ssl]
     certfile = ""
@@ -55,9 +39,9 @@
     # keyfile_password = ""
 
 [client]
-    # Transport preference for rclipctl: auto  | uds | tcp | fifo
+    # Transport preference for rclipctl: auto | fifo | uds | tcp
     transport = "uds"
 
-    # Override which endpoint rclipctl connects to.
-    # Defaults to server.endpoint when empty.
-    # endpoint = ""
+# Override which endpoint rclipctl connects to.
+# Defaults to server.endpoint when empty.
+# endpoint = ""
