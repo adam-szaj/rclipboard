@@ -14,7 +14,14 @@ from rclipboard.app_state import (
     subscribe_client,
     unsubscribe_client,
 )
-from rclipboard.helpers import clipboard_item_to_topic_data, topic_data_to_clipboard_item
+import datetime
+
+from rclipboard.helpers import (
+    clipboard_item_to_topic_data,
+    parse_utc_timestamp,
+    topic_data_to_clipboard_item,
+    utc_timestamp,
+)
 from rclipboard.log import get_logger as gl
 from rclipboard.types import (
     BidirectionalInterface,
@@ -72,6 +79,34 @@ class RPCHandler(BidirectionalInterface):
         self.topics: set[str] = set()
         self.public_key: str | None = None
         self._is_rpc_transport: bool = True
+        # How far this peer's clock leads ours (peer_now - our_now), learned
+        # from the clip.watch handshake. Used to normalise the timestamps on
+        # items this peer puts, so our "newer wins" resolution is skew-proof.
+        self._peer_clock_offset: datetime.timedelta | None = None
+
+    def _record_peer_clock(self, peer_now_utc: str, our_now_utc: str) -> None:
+        """Record the connecting peer's clock offset from its watch.
+
+        ``offset = peer_now - our_now`` (positive when the peer's clock leads
+        ours). We then translate timestamps the peer stamps onto its items into
+        our clock as ``ts - offset`` before comparing them locally.
+        """
+        peer_now = parse_utc_timestamp(peer_now_utc)
+        our_now = parse_utc_timestamp(our_now_utc)
+        if peer_now is None or our_now is None:
+            return
+        self._peer_clock_offset = peer_now - our_now
+        debug("peer %s clock offset = %.3fs",
+              self.name, self._peer_clock_offset.total_seconds())
+
+    def _normalize_peer_ts(self, td: TopicData) -> datetime.datetime | None:
+        """Translate a timestamp stamped by this peer into our local clock."""
+        peer_ts = parse_utc_timestamp(td.meta.get("ts"))
+        if peer_ts is None:
+            return None
+        if self._peer_clock_offset is None:
+            return peer_ts
+        return peer_ts - self._peer_clock_offset
 
     @property
     @abstractmethod
@@ -110,7 +145,12 @@ class RPCHandler(BidirectionalInterface):
         items = []
         for item in params.items:
             topic_data = _clipboard_item_to_topic_data(item, meta=params.meta)
-            await enqueue_topic_data(self.app, data=topic_data, source=self)
+            # Normalise the peer's own timestamp into our clock for conflict
+            # resolution (skew-proof "newer wins"). Falls back to the raw ts
+            # when no offset is known.
+            compare_ts = self._normalize_peer_ts(topic_data)
+            await enqueue_topic_data(self.app, data=topic_data, source=self,
+                                     compare_ts=compare_ts)
             items.append(_topic_data_to_clipboard_item(topic_data))
         return ClipPutResult(items=items)
 
@@ -130,9 +170,14 @@ class RPCHandler(BidirectionalInterface):
 
     async def _handle_clip_watch(
             self, request: JSONRPCRequestMessage) -> ClipWatchResult:
+        # Capture our clock as early as possible so the offset estimate the
+        # peer derives reflects when we actually handled the watch.
+        server_now = utc_timestamp()
         params = ClipWatchParams.model_validate(request.params or {})
         if params.public_key:
             self.public_key = params.public_key
+        if params.peer_now_utc:
+            self._record_peer_clock(params.peer_now_utc, server_now)
         new_topics = [
             topic for topic in params.topics if topic not in self.topics
         ]
@@ -146,7 +191,8 @@ class RPCHandler(BidirectionalInterface):
                 topic: _stub_if_large(td, threshold)
                 for topic, td in contents.items()
             }
-        return ClipWatchResult(topics=list(self.topics), contents=contents)
+        return ClipWatchResult(topics=list(self.topics), contents=contents,
+                               server_now_utc=server_now)
 
     async def _handle_clip_unwatch(
             self, request: JSONRPCRequestMessage) -> ClipWatchResult:

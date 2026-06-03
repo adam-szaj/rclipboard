@@ -1,5 +1,6 @@
 import asyncio
 import contextlib
+import datetime
 import os
 from abc import ABC, abstractmethod
 from logging import Logger
@@ -131,6 +132,14 @@ class AppState:
             os.environ.get("RCLIPBOARD_NOTIFY_DELAY_MS", "250"))
         self.lazy_local_threshold: int = (
             int(os.environ.get("RCLIPBOARD_LAZY_LOCAL_KB", "0")) * 1024)
+        # Tolerance for the time-based conflict resolution. Timestamps within
+        # this window are treated as a tie (→ local wins), which absorbs the
+        # residual error of the clock-offset estimate (~RTT/2) and minor clock
+        # skew, while genuinely newer values still win outside the window.
+        # Default 100 ms: comfortably above localhost RTT/2, yet far below the
+        # gap between two human clipboard actions, so real updates aren't masked.
+        self.sync_tie_window: datetime.timedelta = datetime.timedelta(
+            milliseconds=int(os.environ.get("RCLIPBOARD_SYNC_TIE_MS", "100")))
         self.pending_notifications: dict[str, InternalTopicData] = {}
         self.notification_tasks: dict[str, asyncio.Task[None]] = {}
         self.notification_lock = asyncio.Lock()
@@ -302,8 +311,56 @@ class AppState:
             except Exception as e:
                 error(f"dispatcher error: {e}", exc_info=True)
 
+    def _accept_incoming(self, incoming: InternalTopicData,
+                         existing: InternalTopicData | None) -> bool:
+        """Conflict resolution: decide whether `incoming` replaces `existing`.
+
+        Strategy ("newer wins; tie → local"):
+        - No existing value, or either side lacks a comparable timestamp →
+          accept (backwards compatible: legacy items without meta["ts"] behave
+          as today).
+        - incoming is newer than existing by more than the tie window →
+          accept (newer wins).
+        - incoming is older than existing by more than the tie window →
+          drop (older loses).
+        - Within the tie window (treated as a tie) → keep existing, *unless*
+          the existing value came from a remote peer (proxy) and the incoming
+          one is local, in which case the local value wins the tie.
+
+        Timestamps on the incoming item are already normalised to this host's
+        clock (see ProxyClient clock-offset exchange). The tie window absorbs
+        the residual error of that estimate (~RTT/2) and minor clock skew, so
+        near-simultaneous values resolve deterministically to the local one.
+        """
+        if existing is None:
+            return True
+        new_ts = incoming.compare_ts
+        old_ts = existing.compare_ts
+        if new_ts is None or old_ts is None:
+            return True
+        delta = new_ts - old_ts
+        if delta > self.sync_tie_window:
+            return True
+        if delta < -self.sync_tie_window:
+            return False
+        # Tie (within tolerance): keep existing unless local supersedes remote.
+        return existing.is_remote and not incoming.is_remote
+
     async def _process_data_item(self, topic_data: InternalTopicData):
         assert isinstance(topic_data, InternalTopicData)
+        existing = self.topic_content.get(topic_data.topic)
+        if not self._accept_incoming(topic_data, existing):
+            debug(
+                "conflict: dropping older/tie item topic=%s new_ts=%s old_ts=%s "
+                "new_remote=%s old_remote=%s",
+                topic_data.topic,
+                topic_data.compare_ts,
+                existing.compare_ts if existing else None,
+                topic_data.is_remote,
+                existing.is_remote if existing else None,
+            )
+            topic_data.rejected = True
+            return
         self.topic_content[topic_data.topic] = topic_data
 
     def _dispatch_data_item(self, topic_data: InternalTopicData) -> None:
@@ -415,6 +472,10 @@ class AppState:
     async def process_put_item(self, topic_data: InternalTopicData):
         import time as _time
         await self._process_data_item(topic_data)
+        if topic_data.rejected:
+            # Conflict resolution dropped this item (older / lost a tie): it was
+            # not stored, so do not update monitoring state or notify anyone.
+            return
         # monitoring: update TopicMeta and ClientInfo
         now = _time.monotonic()
         source = topic_data.source
@@ -451,7 +512,7 @@ class AppState:
     async def process_get_item(self, subject: str, topic: str,
                                requester: "Interface | None" = None) -> ItemType:
         import time as _time
-        info(f"subject: '{subject}' topic: '{topic}'")
+        debug(f"process_get_item subject='{subject}' topic='{topic}'")
         content = None
         if subject == "topic":
             assert topic
@@ -610,13 +671,31 @@ def _make_client_info(client: Interface) -> ClientInfo:
     )
 
 
+def _resolve_compare_ts(data: TopicData,
+                        compare_ts: "datetime.datetime | None"):
+    """Pick the timestamp used for conflict resolution.
+
+    An explicit ``compare_ts`` (already normalised to this host's clock by a
+    peer with a known offset) wins. Otherwise fall back to parsing the item's
+    own ``meta["ts"]`` — for locally-originated items that wall clock *is* this
+    host's clock, so it is directly comparable.
+    """
+    from rclipboard.helpers import parse_utc_timestamp
+    if compare_ts is not None:
+        return compare_ts
+    return parse_utc_timestamp(data.meta.get("ts"))
+
+
 async def enqueue_topic_data(app: FastAPI, data: TopicData,
                              source: Interface | None,
                              monitor_conn_id: str | None = None,
-                             monitor_app: str | None = None) -> InternalTopicData:
-    internal_topic_data = InternalTopicData(data=data, source=source,
-                                            monitor_conn_id=monitor_conn_id,
-                                            monitor_app=monitor_app)
+                             monitor_app: str | None = None,
+                             compare_ts: "datetime.datetime | None" = None
+                             ) -> InternalTopicData:
+    internal_topic_data = InternalTopicData(
+        data=data, source=source,
+        monitor_conn_id=monitor_conn_id, monitor_app=monitor_app,
+        compare_ts=_resolve_compare_ts(data, compare_ts))
     assert isinstance(app.state.main, AppState)
     main: AppState = app.state.main
     await main.enqueue_topic_data(internal_topic_data)
@@ -626,9 +705,11 @@ async def enqueue_topic_data(app: FastAPI, data: TopicData,
 async def enqueue_topic_data_nowait(app: FastAPI, data: TopicData,
                                     source: Interface | None,
                                     monitor_conn_id: str | None = None,
-                                    monitor_app: str | None = None):
-    internal_topic_data = InternalTopicData(data=data, source=source,
-                                            monitor_conn_id=monitor_conn_id,
-                                            monitor_app=monitor_app)
+                                    monitor_app: str | None = None,
+                                    compare_ts: "datetime.datetime | None" = None):
+    internal_topic_data = InternalTopicData(
+        data=data, source=source,
+        monitor_conn_id=monitor_conn_id, monitor_app=monitor_app,
+        compare_ts=_resolve_compare_ts(data, compare_ts))
     await app.state.main.enqueue_topic_data_nowait(internal_topic_data)
     return internal_topic_data

@@ -39,6 +39,7 @@ _FIELDS: list[tuple[str, str, str, object]] = [
     ("server", "log_level", "RCLIPBOARD_LOG_LEVEL", str),
     ("server", "py_log_level", "RCLIPBOARD_PY_LOG_LEVEL", str),
     ("server", "notify_delay_ms", "RCLIPBOARD_NOTIFY_DELAY_MS", str),
+    ("server", "sync_tie_ms", "RCLIPBOARD_SYNC_TIE_MS", str),
     ("xsel", "enabled", "RCLIPBOARD_XSEL", _bool_str),
     ("xsel", "path", "RCLIPBOARD_XSEL_PATH", str),
     ("xsel", "interval_ms", "RCLIPBOARD_XSEL_INTERVAL_MS", str),

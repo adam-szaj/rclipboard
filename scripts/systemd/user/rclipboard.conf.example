@@ -15,10 +15,21 @@
 #   "https://127.0.0.1:8989"                         — HTTPS (needs [ssl])
     endpoint = "uds://${XDG_RUNTIME_DIR}/rclipboard/uds.sock"
 
-# Logging
-log_level    = "debug"   # uvicorn level: debug | info | warning | error
-py_log_level = "DEBUG"   # Python logging level
-notify_delay_ms = 250   # clipboard notification debounce (ms)
+    # Logging
+    log_level    = "warning"   # uvicorn level: debug | info | warning | error
+    py_log_level = "WARNING"   # Python logging level
+    notify_delay_ms = 500   # clipboard notification debounce (ms)
+
+    # Tie window (ms) for time-based sync conflict resolution between this
+    # server and a connected proxy/upstream. Timestamps within this window are
+    # treated as a tie → the local value wins. Absorbs clock-offset estimation
+    # error and minor skew; well below the gap between human clipboard actions.
+    sync_tie_ms = 100
+
+    # Admin token for key registry (POST /v1/keys.publish).
+    # Leave empty to disable key registration.
+    # admin_token = ""
+
 
 # X11 clipboard polling via xsel
 [xsel]
@@ -31,7 +42,7 @@ notify_delay_ms = 250   # clipboard notification debounce (ms)
     enabled = true
     # Upstream server endpoint — same formats as server.endpoint above.
     upstream_endpoint = "127.0.0.1:8988"
-    # upstream_endpoint = "uds:///run/user/1000/rclipboard/uds.sock"
+    # upstream_endpoint = "uds://${XDG_RUNTIME_DIR}/rclipboard/upstream.sock"
 
 [ssl]
     certfile = ""
@@ -39,7 +50,7 @@ notify_delay_ms = 250   # clipboard notification debounce (ms)
     # keyfile_password = ""
 
 [client]
-    # Transport preference for rclipctl: auto | fifo | uds | tcp
+    # Transport preference for rclipctl: auto | uds | tcp
     transport = "uds"
 
 # Override which endpoint rclipctl connects to.

@@ -88,6 +88,17 @@ When `RCLIPBOARD_PROXY=1`, `proxy.py` instantiates a `ProxyClient` (extends `Bid
 
 The local HTTP/WS server then serves local clients, reducing SSH round-trips. The proxy is a regular subscriber registered in `app_state`, so it receives all local topic updates through its drainer (decoupled from dispatcher). Upstream sends are non-blocking and buffered per-topic.
 
+### Conflict resolution (time-based sync)
+
+Both the main server and a proxy may already hold buffered topics in memory when they (re)connect. To merge them deterministically, every stored item carries a UTC timestamp (`meta["ts"]`, stamped on `clip.put` if absent) and resolution follows **"newer wins; on a tie the local value wins"**:
+
+- **Central decision** — `AppState._process_data_item` calls `_accept_incoming()` before overwriting `topic_content[topic]`. This protects *every* ingest path (proxy, ws, uds, xsel, fifo, http) uniformly. Rejected items are flagged `rejected=True`; `process_put_item` then skips monitoring updates and notifications.
+- **Clock-offset exchange** — peers' wall clocks may differ, so absolute `ts` values aren't directly comparable. During the `clip.watch` handshake the watcher sends `peer_now_utc` and the server replies with `server_now_utc`. The proxy estimates the offset with Cristian's algorithm (midpoint of send/receive vs. server time) and **normalises** each upstream item's `ts` into the local clock (`ProxyClient._normalize_peer_ts`) before storing it. Symmetrically, the server records the watcher's clock (`RPCHandler._record_peer_clock`) and normalises the timestamps on items that peer puts (`_handle_clip_put`).
+- **Tie window** — the offset estimate has residual error (~RTT/2) and clocks drift, so timestamps within `RCLIPBOARD_SYNC_TIE_MS` (default 100 ms) are treated as a tie. On a tie a **local** value supersedes a **remote** one (a proxy-ingested item is "remote", detected via the `is_remote_source` marker on `ProxyClient`). 100 ms is well above localhost RTT/2 yet far below the gap between two human clipboard actions, so genuine updates are never masked.
+- **Backwards compatible** — if either side lacks a comparable `ts` (legacy item), the incoming value is accepted as before.
+
+`InternalTopicData.compare_ts` holds the (normalised) timestamp used for the comparison; `enqueue_topic_data[_nowait]` accepts an optional `compare_ts` so ingest paths can supply the clock-corrected value.
+
 ### FIFO dual mode
 
 - Standalone: `RCLIPBOARD_ENDPOINT=fifo:///path` — FIFO is the only transport
@@ -113,6 +124,7 @@ The local HTTP/WS server then serves local clients, reducing SSH round-trips. Th
 | `RCLIPBOARD_XSEL_ENCRYPT` | `1` to encrypt X11 clipboard data via `rclipctl exec` (default: `0`) |
 | `RCLIPCTL_PATH` | Path to `rclipctl` binary used by xsel encrypt mode (default: `rclipctl`) |
 | `RCLIPBOARD_NOTIFY_DELAY_MS` | Notification debounce delay (default: 250) |
+| `RCLIPBOARD_SYNC_TIE_MS` | Tie window (ms) for time-based conflict resolution; timestamps within it are a tie → local wins (default: 100) |
 | `RCLIPBOARD_LOG_LEVEL` | App log level |
 | `RCLIPBOARD_PY_LOG_LEVEL` | Python logging level override |
 | `RCLIPBOARD_SSL_CERTFILE/KEYFILE` | Paths to TLS cert/key for HTTPS |

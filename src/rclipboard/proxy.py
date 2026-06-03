@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio as a
 import contextlib
+import datetime
 import json
 import os
 import ssl
@@ -16,6 +17,7 @@ from websockets.asyncio.client import connect, unix_connect
 from rclipboard.app_state import (
     enqueue_request_topic,
     enqueue_topic_data,
+    enqueue_topic_data_nowait,
     register_client,
     subscribe_client,
     unregister_client,
@@ -24,8 +26,10 @@ from rclipboard.app_state import (
 from rclipboard.helpers import (
     clipboard_item_to_topic_data,
     next_id,
+    parse_utc_timestamp,
     topic_data_to_clipboard_item,
     upstream_endpoint_from_env,
+    utc_timestamp,
 )
 from rclipboard.log import get_logger
 from rclipboard.rpc_handler import RPCHandler, RPCMethodError
@@ -94,12 +98,68 @@ class ProxyClient(RPCHandler):
         self.rx_count: int = 0                     # total clip.changed received
         self.tx_count: int = 0                     # total clip.put sent upstream
         self.reconnect: bool = True                # whether to auto-reconnect on disconnect
+        # Conflict-resolution clock sync: how far the upstream clock leads ours
+        # (server_now - our_now), exchanged during the clip.watch handshake.
+        # None until the first successful watch on a connection.
+        self._clock_offset: datetime.timedelta | None = None
+        self._watch_sent_at_utc: datetime.datetime | None = None
         info(f"{self.__dict__}")
+
+    # Marker read by InternalTopicData.is_remote — items ingested from this
+    # client originate on a remote peer, so they lose ties against local writes.
+    is_remote_source: bool = True
 
     @property
     @override
     def name(self) -> str:
         return "ProxyClient"
+
+    def _update_clock_offset(self, raw_result: object) -> None:
+        """Estimate the upstream clock offset from the watch reply.
+
+        The reply carries ``server_now_utc`` — the upstream's wall clock at the
+        moment it processed our watch. We approximate the matching point on our
+        own clock as the midpoint between sending the watch and receiving the
+        reply (Cristian's algorithm), so ``offset = server_now - our_mid``
+        cancels roughly half the round-trip delay. The offset is then used to
+        translate upstream timestamps into our clock for "newer wins".
+        """
+        server_now: datetime.datetime | None = None
+        if isinstance(raw_result, dict):
+            server_now = parse_utc_timestamp(raw_result.get("server_now_utc"))
+        if server_now is None:
+            # Upstream did not report its clock (older peer) — leave offset at
+            # its previous value (or None), so timestamps are compared as-is.
+            debug("proxy: upstream did not report server_now_utc; "
+                  "clock offset unchanged")
+            return
+        recv = parse_utc_timestamp(utc_timestamp())
+        sent = self._watch_sent_at_utc
+        if recv is not None and sent is not None:
+            our_mid = sent + (recv - sent) / 2
+        else:
+            our_mid = recv or sent
+        if our_mid is None:
+            return
+        self._clock_offset = server_now - our_mid
+        info("proxy: upstream clock offset = %.3fs (server leads)",
+             self._clock_offset.total_seconds())
+
+    def _normalize_peer_ts(self, td: TopicData) -> datetime.datetime | None:
+        """Translate an upstream item's meta['ts'] into our local clock.
+
+        Returns the normalised aware datetime for conflict resolution, or None
+        when the item has no comparable timestamp. With ``offset = server_now -
+        our_now``, a timestamp produced on the upstream clock maps to our clock
+        as ``ts - offset``. When no offset is known yet (no handshake), the raw
+        ts is used as-is.
+        """
+        peer_ts = parse_utc_timestamp(td.meta.get("ts"))
+        if peer_ts is None:
+            return None
+        if self._clock_offset is None:
+            return peer_ts
+        return peer_ts - self._clock_offset
 
     @property
     def _lazy_upstream_threshold(self) -> int:
@@ -168,12 +228,17 @@ class ProxyClient(RPCHandler):
 
     async def _watch(self) -> None:
         self._watch_id = next_id()
+        # Carry our current UTC time so the upstream can compute the clock
+        # offset symmetrically; record it to estimate the offset on the reply.
+        now = utc_timestamp()
+        self._watch_sent_at_utc = parse_utc_timestamp(now)
         await self._send_json({
             "jsonrpc": "2.0",
             "id": self._watch_id,
             "method": "clip.watch",
             "params": {
                 "topics": list(self.topics),
+                "peer_now_utc": now,
             },
         })
 
@@ -182,9 +247,10 @@ class ProxyClient(RPCHandler):
                         meta: dict[str, JsonValue] | None = None):
         if not self.connected:
             return
+        req_id = next_id()
         await self._send_json({
             "jsonrpc": "2.0",
-            "id": next_id(),
+            "id": req_id,
             "method": "clip.put",
             "params": {
                 "items": [item.model_dump(mode="json")],
@@ -193,6 +259,7 @@ class ProxyClient(RPCHandler):
         })
         self.last_tx_at = a.get_event_loop().time()
         self.tx_count += 1
+        debug(f"proxy→upstream clip.put topic={item.topic} size={len(item.value.encode())} tx_at={self.last_tx_at:.3f}")
 
     async def _upstream_clip_get(self, topic: str) -> TopicData | None:
         """Fetch full value from upstream via WS clip.get. Returns None if unavailable."""
@@ -251,8 +318,10 @@ class ProxyClient(RPCHandler):
             else:
                 info(f"proxy subscribed upstream topics: {self.topics}")
                 result = ClipWatchResult.model_validate(message.get("result"))
+                self._update_clock_offset(message.get("result"))
                 threshold = self._lazy_upstream_threshold
                 for _, topic_data in result.contents.items():
+                    compare_ts = self._normalize_peer_ts(topic_data)
                     val_len = len(topic_data.value.value.encode())
                     if threshold > 0 and val_len >= threshold:
                         topic_data = topic_data.model_copy(update={
@@ -260,10 +329,11 @@ class ProxyClient(RPCHandler):
                             "stub": True,
                             "fetch_url": f"/v1/clip/{topic_data.topic}",
                         })
-                    await enqueue_topic_data(
+                    await enqueue_topic_data_nowait(
                         self.app,
                         data=topic_data,
                         source=self,
+                        compare_ts=compare_ts,
                     )
 
     async def _handle_event(self, message: dict[str, object]) -> None:
@@ -281,6 +351,7 @@ class ProxyClient(RPCHandler):
         for raw_item in raw_items:
             item = ClipboardItem.model_validate(raw_item)
             topic_data = _clipboard_item_to_topic_data(item, meta=meta)
+            compare_ts = self._normalize_peer_ts(topic_data)
             val_len = len(topic_data.value.value.encode())
             if threshold > 0 and val_len >= threshold:
                 # store stub locally — full value fetched on clip.get
@@ -289,13 +360,17 @@ class ProxyClient(RPCHandler):
                     "stub": True,
                     "fetch_url": f"/v1/clip/{topic_data.topic}",
                 })
-            await enqueue_topic_data(
+            await enqueue_topic_data_nowait(
                 self.app,
                 data=topic_data,
                 source=self,
+                compare_ts=compare_ts,
             )
         self.last_rx_at = a.get_event_loop().time()
         self.rx_count += 1
+        topics_received = [ClipboardItem.model_validate(r).topic for r in raw_items if isinstance(r, dict)]
+        tx_lag = (self.last_rx_at - self.last_tx_at) if self.last_tx_at else None
+        debug(f"proxy←upstream clip.changed topics={topics_received} rx_at={self.last_rx_at:.3f} lag={tx_lag:.3f}s" if tx_lag is not None else f"proxy←upstream clip.changed topics={topics_received} rx_at={self.last_rx_at:.3f}")
 
     async def run_loop(self):
         ws_cm: Any

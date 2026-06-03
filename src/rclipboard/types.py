@@ -1,5 +1,6 @@
 import asyncio as a
 import contextlib
+import datetime
 import logging
 import re
 import time
@@ -172,11 +173,17 @@ class ClipGetResult(BaseModel):
 class ClipWatchParams(BaseModel):
     topics: list[str]
     public_key: str | None = None
+    # Watcher's current UTC time, used for clock-offset exchange (conflict
+    # resolution). Optional — older peers omit it.
+    peer_now_utc: str | None = None
 
 
 class ClipWatchResult(BaseModel):
     topics: list[str] = Field(default_factory=list)
     contents: dict[str, TopicData] = Field(default_factory=dict)
+    # Server's UTC time at the moment it handled the watch, so the watcher can
+    # estimate the clock offset. Omitted (None) keeps the field out of the wire.
+    server_now_utc: str | None = None
 
 
 class TopicsListParams(BaseModel):
@@ -230,13 +237,31 @@ class InternalTopicData(ABC):
 
     def __init__(self, data: TopicData, source: Interface | None,
                  monitor_conn_id: str | None = None,
-                 monitor_app: str | None = None):
+                 monitor_app: str | None = None,
+                 compare_ts: "datetime.datetime | None" = None):
         self.data: TopicData = data
         self.source: Interface | None = source
         self.stored_at: float = time.monotonic()
         self.stored_at_utc: str = data.meta.get("ts", "")  # type: ignore[assignment]
         self.monitor_conn_id: str | None = monitor_conn_id
         self.monitor_app: str | None = monitor_app
+        # Timestamp used for conflict resolution ("newer wins"), already
+        # normalised to *this* host's clock when the item arrived from a peer
+        # with a known clock offset. ``None`` when no comparable ts exists.
+        self.compare_ts: "datetime.datetime | None" = compare_ts
+        # Set True by the dispatcher when conflict resolution drops this item
+        # (older or losing a tie), so callers can tell it was not stored.
+        self.rejected: bool = False
+
+    @property
+    def is_remote(self) -> bool:
+        """True when this item originated from a remote peer (proxy upstream).
+
+        Used for tie-breaking: on equal timestamps a local value supersedes a
+        remote one. Detected via a duck-typed marker on the source interface to
+        avoid importing the proxy module (circular import).
+        """
+        return bool(getattr(self.source, "is_remote_source", False))
 
     @property
     def topic(self) -> str:
