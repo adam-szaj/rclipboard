@@ -152,7 +152,7 @@ def install_module(app: FastAPI):
     @app.post("/v1/clip.get", response_model=ClipGetResult)
     async def _post_get_clip(body: ClipGetParams,
                              request: Request) -> ClipGetResult:
-        info(f"request from: {request.client} headers: {request.headers}")
+        debug(f"clip.get from: {request.client}")
 
         content: TopicData | None = await enqueue_request_topic(
             app, body.topic)
@@ -249,7 +249,7 @@ def install_module(app: FastAPI):
     @app.post("/v1/clip.put", response_model=ClipPutResult)
     async def _post_clip_put(body: ClipPutParams,
                              request: Request) -> ClipPutResult:
-        info(f"request from: {request.client} headers: {request.headers}")
+        debug(f"clip.put from: {request.client}")
         client = request.client
         meta_app = str(body.meta["app"]) if body.meta and body.meta.get("app") else None
         if client and client.host:
