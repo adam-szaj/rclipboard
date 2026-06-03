@@ -42,6 +42,83 @@ RCLIPCTL_PATH: Path = Path(os.environ.get("RCLIPCTL_PATH", "rclipctl"))
 POLL_INTERVAL_MS: int = int(
     os.environ.get("RCLIPBOARD_XSEL_INTERVAL_MS", "500"))
 
+
+def _default_display_env_file() -> Path:
+    runtime = os.environ.get("XDG_RUNTIME_DIR") or "/tmp"
+    return Path(runtime) / "rclipboard" / "display.env"
+
+
+# Path to the file written by the session-bound rclipboard-display.service.
+# It carries DISPLAY/WAYLAND_DISPLAY/XAUTHORITY for the *current* graphical
+# session and is re-read on every xsel invocation, so the server process does
+# not need to know about DISPLAY itself (and never has to restart to pick it
+# up when the graphical session comes up after the service).
+DISPLAY_ENV_FILE: Path = Path(
+    os.environ.get("RCLIPBOARD_DISPLAY_ENV_FILE", "")
+    or _default_display_env_file()
+)
+
+# Variables sourced from the display env-file and injected into xsel's env.
+_DISPLAY_ENV_KEYS = ("DISPLAY", "WAYLAND_DISPLAY", "XAUTHORITY")
+
+
+def load_display_env(path: Path | None = None) -> dict[str, str]:
+    """Read DISPLAY/WAYLAND_DISPLAY/XAUTHORITY from the display env-file.
+
+    The file is written by the session-bound helper service in simple
+    ``KEY=VALUE`` lines (optionally with surrounding quotes, as produced by
+    ``systemd``/shell). Missing file or unreadable lines yield an empty dict
+    so callers transparently fall back to the process environment.
+
+    ``path`` defaults to the module-level :data:`DISPLAY_ENV_FILE`, resolved at
+    call time so it honours patching/reconfiguration.
+    """
+    if path is None:
+        path = DISPLAY_ENV_FILE
+    result: dict[str, str] = {}
+    try:
+        text = path.read_text()
+    except OSError:
+        return result
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export "):
+            line = line[len("export "):]
+        key, sep, value = line.partition("=")
+        if not sep:
+            continue
+        key = key.strip()
+        if key not in _DISPLAY_ENV_KEYS:
+            continue
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
+            value = value[1:-1]
+        if value:
+            result[key] = value
+    return result
+
+
+def _xsel_env() -> dict[str, str]:
+    """Build the environment for xsel subprocesses.
+
+    Starts from the process environment and overlays whatever the current
+    graphical session published into the display env-file, so xsel always
+    runs against the live DISPLAY even if the server started before login.
+    """
+    env = os.environ.copy()
+    env.update(load_display_env())
+    return env
+
+
+def _display_available() -> bool:
+    """True if a usable DISPLAY is known, from the env-file or the process env."""
+    if load_display_env().get("DISPLAY"):
+        return True
+    return bool(os.environ.get("DISPLAY"))
+
+
 # Topic to xsel option mapping
 TOPIC_TO_XSEL = {
     "c": "-b",  # clipboard
@@ -63,14 +140,16 @@ async def _exec(
     *args: str,
     input_data: bytes | None = None,
     timeout: float = 5.0,
+    env: dict[str, str] | None = None,
 ) -> tuple[int, bytes, bytes]:
     """Run a process with optional stdin and a timeout.
 
     xsel -i may remain alive to own the selection on some setups; we therefore
     bound the wait and terminate on timeout to avoid hangs.
     """
-    # Ensure X env is propagated
-    env = os.environ.copy()
+    # Ensure X env is propagated; callers pass the display-aware env for xsel.
+    if env is None:
+        env = os.environ.copy()
     proc = await a.create_subprocess_exec(
         exec,
         *args,
@@ -102,19 +181,23 @@ async def _exec(
 
 
 async def read_selection(opt: str, timeout: float) -> bytes:
-    # If no DISPLAY, xsel cannot work
-    if not os.environ.get("DISPLAY"):
+    # If no DISPLAY (from the display env-file or the process env), xsel
+    # cannot work.
+    if not _display_available():
         trace("xsel read_selection skipped: no DISPLAY")
         return b""
+    env = _xsel_env()
     if XSEL_ENCRYPT:
         code, out, _ = await _exec(
             RCLIPCTL_PATH,
             "exec", "--encrypt-output", "--fetch-keys",
             "--", str(XSEL_PATH), opt, "-o",
             timeout=timeout,
+            env=env,
         )
     else:
-        code, out, _ = await _exec(XSEL_PATH, opt, "-o", timeout=timeout)
+        code, out, _ = await _exec(XSEL_PATH, opt, "-o", timeout=timeout,
+                                   env=env)
     if code != 0:
         return b""
     return out
@@ -122,11 +205,12 @@ async def read_selection(opt: str, timeout: float) -> bytes:
 
 async def write_selection(opt: str, data: bytes, timeout: float) -> None:
     # If no DISPLAY, skip silently
-    if not os.environ.get("DISPLAY"):
+    if not _display_available():
         trace("xsel write_selection skipped: no DISPLAY")
         return
     # Place -i before selection flag is fine; keep order consistent
-    await _exec(XSEL_PATH, "-n", "-i", opt, input_data=data, timeout=timeout)
+    await _exec(XSEL_PATH, "-n", "-i", opt, input_data=data, timeout=timeout,
+                env=_xsel_env())
 
 
 class XselState:
@@ -176,15 +260,18 @@ class XselInterface(BidirectionalInterface):
 
     @property
     def good(self) -> bool:
-        return bool(self.enabled and os.environ.get("DISPLAY") and self.task)
+        return bool(self.enabled and _display_available() and self.task)
 
     def status(self) -> dict[str, JsonValue]:
+        display = load_display_env().get("DISPLAY") or os.environ.get(
+            "DISPLAY", "")
         return {
             "enabled": self.enabled,
             "good": self.good,
             "path": str(XSEL_PATH),
             "encrypt": XSEL_ENCRYPT,
-            "display": os.environ.get("DISPLAY", ""),
+            "display": display,
+            "display_env_file": str(DISPLAY_ENV_FILE),
             "interval_ms": POLL_INTERVAL_MS,
             "topics": list(sorted(self.selection_states.keys())),
             "last_error": self.last_error,
@@ -225,6 +312,7 @@ class XselInterface(BidirectionalInterface):
                     "--", str(XSEL_PATH), "-n", "-i", opt,
                     input_data=data_bytes,
                     timeout=2.5,
+                    env=_xsel_env(),
                 )
             else:
                 await write_selection(opt, data_bytes, timeout=2.5)
@@ -308,11 +396,14 @@ async def shutdown_xsel(app: FastAPI) -> None:
 def get_xsel_status(app: FastAPI) -> dict[str, JsonValue]:
     conn: XselInterface | None = getattr(app.state, "xsel", None)
     if conn is None:
+        display = load_display_env().get("DISPLAY") or os.environ.get(
+            "DISPLAY", "")
         return {
             "enabled": False,
             "good": False,
             "path": str(XSEL_PATH),
-            "display": os.environ.get("DISPLAY", ""),
+            "display": display,
+            "display_env_file": str(DISPLAY_ENV_FILE),
             "interval_ms": POLL_INTERVAL_MS,
             "topics": list(sorted(TOPIC_TO_XSEL.keys())),
             "last_error": None,

@@ -122,6 +122,7 @@ Both the main server and a proxy may already hold buffered topics in memory when
 | `RCLIPBOARD_XSEL_PATH` | Path to `xsel` binary (default: `/usr/bin/xsel`) |
 | `RCLIPBOARD_XSEL_INTERVAL_MS` | X11 clipboard poll interval (default: 500) |
 | `RCLIPBOARD_XSEL_ENCRYPT` | `1` to encrypt X11 clipboard data via `rclipctl exec` (default: `0`) |
+| `RCLIPBOARD_DISPLAY_ENV_FILE` | File holding `DISPLAY`/`WAYLAND_DISPLAY`/`XAUTHORITY` for the current graphical session, re-read by xsel each call (default: `${XDG_RUNTIME_DIR}/rclipboard/display.env`) |
 | `RCLIPCTL_PATH` | Path to `rclipctl` binary used by xsel encrypt mode (default: `rclipctl`) |
 | `RCLIPBOARD_NOTIFY_DELAY_MS` | Notification debounce delay (default: 250) |
 | `RCLIPBOARD_SYNC_TIE_MS` | Tie window (ms) for time-based conflict resolution; timestamps within it are a tie → local wins (default: 100) |
@@ -330,6 +331,19 @@ rclipctl exec --decrypt-input -- xsel -ib
 - Read: calls `rclipctl exec --encrypt-output --fetch-keys -- xsel <opt> -o`, stores ciphertext with `meta["encrypted"]=true`
 - Write: if incoming data is encrypted, calls `rclipctl exec --decrypt-input -- xsel -n -i <opt>`
 - Requires `age`, `rclipctl`, and at least one registered public key on PATH
+
+**Display env-file (DISPLAY race fix)**: When `rclipboard.service` starts at login it
+may not yet have `DISPLAY` (GNOME/Wayland import it into the systemd user
+environment only after the graphical session is up), so xsel silently no-ops.
+Rather than restart the server (which would lose in-memory clipboard state),
+xsel re-reads `DISPLAY`/`WAYLAND_DISPLAY`/`XAUTHORITY` from a small env-file on
+*every* invocation (`load_display_env()` in `xsel.py`, falling back to the
+process env). The session-bound `rclipboard-display.service`
+(`WantedBy=graphical-session.target`, `PartOf=graphical-session.target`) writes
+that file from the live session and removes it on `ExecStop`. Because the unit
+is per-user and tied to *this* user's graphical session, a different user
+logging in at the console never leaks their `DISPLAY` into this server. The main
+`rclipboard.service` stays fully transparent — it never needs `DISPLAY`.
 
 ### API contract
 

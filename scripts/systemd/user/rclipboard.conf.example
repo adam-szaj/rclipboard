@@ -36,6 +36,16 @@
     enabled              = false
     path         = "/usr/bin/xsel"
     interval_ms  = 250
+    # Encrypt clipboard data captured from X11 via rclipctl exec.
+    # Requires age and rclipctl on PATH, and at least one registered public key.
+    # Default: false (disabled)
+    encrypt      = false
+    # File holding DISPLAY/WAYLAND_DISPLAY/XAUTHORITY for the current graphical
+    # session. Written by rclipboard-display.service (bound to
+    # graphical-session.target) and re-read by xsel on every invocation, so the
+    # server picks up the display without a restart after login. Default:
+    # ${XDG_RUNTIME_DIR}/rclipboard/display.env
+    display_env_file = "${XDG_RUNTIME_DIR}/rclipboard/display.env"
 
 [proxy]
     # Enable proxy mode: connect to an upstream server and replicate topics locally.

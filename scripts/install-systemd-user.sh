@@ -31,12 +31,15 @@ done
 for f in "$REPO_DIR"/scripts/bin/*; do
     [ -f "$f" ] && copy_executable "$f" "${BIN_DIR}/$(basename "$f")"
 done
+mkdir -p "${HOME}/.bash.d"
 for f in "$REPO_DIR"/scripts/bash.d/*; do
     [ -f "$f" ] && copy_executable "$f" "${HOME}/.bash.d/$(basename "$f")"
 done
 
 # ── systemd unit ─────────────────────────────────────────────────────────────
 copy_unit "$REPO_DIR/scripts/systemd/user/rclipboard.service" "$UNIT_DIR/rclipboard.service"
+copy_unit "$REPO_DIR/scripts/systemd/user/rclipboard-display.service" \
+    "$UNIT_DIR/rclipboard-display.service"
 
 mkdir -p "$UNIT_DIR/rclipboard.service.d"
 cat > "$UNIT_DIR/rclipboard.service.d/override.conf" << EOF
@@ -74,3 +77,7 @@ echo "  export PATH=\"\$HOME/.local/bin:\$PATH\""
 echo
 echo "Enable:"
 echo "  systemctl --user enable --now rclipboard.service"
+echo
+echo "For X11/xsel clipboard sync, also enable the session-bound display"
+echo "publisher (no-op on headless / non-graphical logins):"
+echo "  systemctl --user enable --now rclipboard-display.service"

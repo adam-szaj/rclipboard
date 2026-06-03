@@ -44,6 +44,7 @@ _FIELDS: list[tuple[str, str, str, object]] = [
     ("xsel", "path", "RCLIPBOARD_XSEL_PATH", str),
     ("xsel", "interval_ms", "RCLIPBOARD_XSEL_INTERVAL_MS", str),
     ("xsel", "encrypt", "RCLIPBOARD_XSEL_ENCRYPT", _bool_str),
+    ("xsel", "display_env_file", "RCLIPBOARD_DISPLAY_ENV_FILE", str),
     ("raw_uds", "path", "RCLIPBOARD_RAW_UDS_PATH", str),
     ("server", "admin_token", "RCLIPBOARD_ADMIN_TOKEN", str),
     ("server", "reload", "RCLIPBOARD_RELOAD", _bool_str),
