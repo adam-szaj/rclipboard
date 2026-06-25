@@ -8,7 +8,7 @@ WORKDIR /app
 RUN apt-get update -y && apt-get install -y --no-install-recommends \
     ca-certificates curl jq && rm -rf /var/lib/apt/lists/*
 
-COPY pyproject.toml ./
+COPY pyproject.toml README.md ./
 COPY src ./src
 COPY scripts ./scripts
 
