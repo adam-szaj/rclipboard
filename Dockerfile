@@ -1,8 +1,7 @@
 FROM ubuntu:26.04
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1 \
-    DEBIAN_FRONTEND=noninteractive
+    PYTHONUNBUFFERED=1
 
 # This is an INTERACTIVE TEST image: ssh in as `user`, then run the server /
 # rclipctl by hand. sshd is PID 1; the rclipboard server is NOT started for you.
@@ -14,7 +13,10 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 #   age                       — client-side age encryption (rclipctl exec / --encrypt)
 #   openssh-server / -client  — sshd for interactive login + ssh for outbound/tunnels
 #   bash                      — interactive login shell
-RUN apt-get update -y && apt-get install -y --no-install-recommends \
+# DEBIAN_FRONTEND is scoped to this RUN only (not a persistent ENV) so it does
+# not affect `apt` run interactively over SSH later.
+RUN DEBIAN_FRONTEND=noninteractive apt-get update -y \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
         python3 \
         python3-venv \
         ca-certificates \
