@@ -83,7 +83,7 @@ All transports (WS connections, proxy, xsel, FIFO) extend `BidirectionalInterfac
 When `RCLIPBOARD_PROXY=1`, `proxy.py` instantiates a `ProxyClient` (extends `BidirectionalInterface`) that:
 - opens a WebSocket to the upstream server
 - calls `clip.watch` on default topics (`["c", "p", "s"]`) to subscribe
-- forwards local `clip.put` upstream via `send()`
+- forwards local `clip.put` upstream via `send()`, stamping `meta["via"]="proxy"` and `meta["host"]=<hostname>` so the upstream can tell the put arrived through a proxy and from which host (original client `meta` is preserved)
 - ingests `clip.changed` from upstream and stores it locally via `app_state.enqueue_topic_data()`
 
 The local HTTP/WS server then serves local clients, reducing SSH round-trips. The proxy is a regular subscriber registered in `app_state`, so it receives all local topic updates through its drainer (decoupled from dispatcher). Upstream sends are non-blocking and buffered per-topic.

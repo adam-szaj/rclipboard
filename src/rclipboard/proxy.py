@@ -5,6 +5,7 @@ import contextlib
 import datetime
 import json
 import os
+import socket
 import ssl
 from logging import Logger
 from pathlib import Path
@@ -103,6 +104,8 @@ class ProxyClient(RPCHandler):
         # None until the first successful watch on a connection.
         self._clock_offset: datetime.timedelta | None = None
         self._watch_sent_at_utc: datetime.datetime | None = None
+        # Hostname stamped onto forwarded puts (constant for this process).
+        self._hostname: str = socket.gethostname()
         info(f"{self.__dict__}")
 
     # Marker read by InternalTopicData.is_remote — items ingested from this
@@ -248,13 +251,19 @@ class ProxyClient(RPCHandler):
         if not self.connected:
             return
         req_id = next_id()
+        # Tag every forwarded put so the upstream can tell it arrived via a proxy
+        # and from which host (e.g. for audit / multi-peer echo handling). Copy
+        # first — `meta` may be the caller's `data.meta`, shared with local state.
+        meta = dict(meta or {})
+        meta["via"] = "proxy"
+        meta["host"] = self._hostname
         await self._send_json({
             "jsonrpc": "2.0",
             "id": req_id,
             "method": "clip.put",
             "params": {
                 "items": [item.model_dump(mode="json")],
-                "meta": meta or dict(),
+                "meta": meta,
             },
         })
         self.last_tx_at = a.get_event_loop().time()

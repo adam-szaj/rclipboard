@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import asyncio
+import json
 import time
 import unittest
+
+import websockets
 
 from tests.helpers import (
     free_port,
@@ -70,6 +74,40 @@ class ProxyIntegrationTests(unittest.TestCase):
         self.assertEqual(status, 200)
         upstream = wait_for_value(self.upstream_port, "p", "from-proxy")
         self.assertEqual(upstream["item"]["value"], "from-proxy")
+
+    def test_proxy_forward_stamps_via_and_host_meta(self):
+        # clip.get does not expose meta, so observe the forwarded clip.changed on
+        # the upstream via a WebSocket watcher to inspect the meta the proxy sent.
+        async def run() -> dict:
+            uri = f"ws://127.0.0.1:{self.upstream_port}/ws"
+            async with websockets.connect(uri) as ws:
+                await ws.send(
+                    '{"jsonrpc":"2.0","id":"w","method":"clip.watch","params":{"topics":["s"]}}'
+                )
+                await asyncio.wait_for(ws.recv(), timeout=5)
+                # Put on the PROXY; it forwards upstream as clip.put.
+                status, _ = post_json(
+                    f"http://127.0.0.1:{self.proxy_port}/v1/clip.put",
+                    {
+                        "items": [
+                            {"topic": "s", "mime": "text/plain",
+                             "encoding": "utf-8", "value": "stamp-me"}
+                        ],
+                        "meta": {"app": "cli"},
+                    },
+                )
+                assert status == 200
+                for _ in range(5):
+                    frame = json.loads(await asyncio.wait_for(ws.recv(), timeout=5))
+                    if frame.get("method") == "clip.changed":
+                        return frame["params"].get("meta", {})
+            return {}
+
+        meta = asyncio.run(run())
+        self.assertEqual(meta.get("via"), "proxy")
+        self.assertTrue(meta.get("host"), "expected a non-empty host in meta")
+        # original client meta is preserved
+        self.assertEqual(meta.get("app"), "cli")
 
 
 class ProxyShutdownTests(unittest.TestCase):
