@@ -281,7 +281,7 @@ if [ -n "${RCLIPCTL_HOST:-}" ] || [ -n "${RCLIPCTL_PORT:-}" ]; then
 fi
 
 # ── parse subcommand options ──────────────────────────────────────────────────
-args=$(getopt -o "cpsEet:h" \
+args=$(getopt -o "a:cpsEet:h" \
     -l "app:,clipboard,primary,secondary,encoded,encrypt,fetch-keys,json,help,encoding:,\
 endpoint:,host:,port:,transport:,uds:,topic:,config:,key:,key-file:,token:,label:" \
     -- "$@")
