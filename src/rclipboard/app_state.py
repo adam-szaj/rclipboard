@@ -688,9 +688,6 @@ def _make_client_info(client: Interface) -> ClientInfo:
     elif isinstance(client, XselInterface):
         kind = "xsel"
         addr = None
-    elif client.__class__.__name__ == "FIFOTransport":
-        kind = "fifo"
-        addr = None
     elif client.__class__.__name__ == "WSServerConnection":
         kind = "ws"
         ws = getattr(client, "ws", None)

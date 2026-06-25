@@ -273,7 +273,7 @@ class InternalTopicData(ABC):
 @dataclass
 class ClientInfo:
     conn_id: str
-    kind: str                           # "ws" | "uds" | "proxy" | "xsel" | "fifo"
+    kind: str                           # "ws" | "uds" | "proxy" | "xsel"
     addr: str | None
     app: str | None
     connected_at: float                 # monotonic

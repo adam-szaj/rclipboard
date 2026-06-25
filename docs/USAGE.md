@@ -6,7 +6,7 @@ Tools covered: `rclipctl`, `rcliptunel`.
 
 ## rclipctl
 
-Command-line client for rclipboard. Auto-detects transport: FIFO → UDS → TCP.
+Command-line client for rclipboard. Auto-detects transport: UDS → TCP.
 
 ```
 rclipctl <command> [options]
@@ -18,8 +18,8 @@ These apply to every command that contacts the server.
 
 | Option | Description |
 |---|---|
-| `--endpoint <url>` | `host:port`, `http://…`, `uds:///path`, `fifo:///dir` |
-| `--transport <mode>` | `auto` \| `uds` \| `tcp` \| `fifo` (override auto-detect) |
+| `--endpoint <url>` | `host:port`, `http://…`, `uds:///path` |
+| `--transport <mode>` | `auto` \| `uds` \| `tcp` (override auto-detect) |
 | `--host <host>` | TCP host (default: `127.0.0.1`) |
 | `--port <port>` | TCP port (default: `8989`) |
 | `--uds <path>` | Unix domain socket path |

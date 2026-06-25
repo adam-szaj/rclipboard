@@ -425,7 +425,7 @@ Proxy telemetry is exposed via `status.get` under the `proxy` key (see above).
 
 ## CLI (`rclipctl`)
 
-Auto-detects transport: FIFO → UDS → TCP.
+Auto-detects transport: UDS → TCP.
 
 | Subcommand | Purpose |
 |------------|---------|

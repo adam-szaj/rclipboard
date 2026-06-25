@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import subprocess
 import tempfile
 import unittest
@@ -24,15 +23,9 @@ class RclipctlTransportTests(unittest.TestCase):
         port = free_port()
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
-            fifo_dir = tmp_path / "fifo"
-            fifo_dir.mkdir()
-            (fifo_dir / "health.json").write_text(
-                json.dumps({"ok": False, "xsel_enabled": False, "xsel_good": False})
-            )
             env_file = tmp_path / "env"
             env_file.write_text(
                 f"RCLIPBOARD_ENDPOINT=127.0.0.1:{port}\n"
-                f"RCLIPBOARD_FIFO_DIR={fifo_dir}\n"
             )
 
             with running_server(port=port):

@@ -151,20 +151,12 @@ Accepted formats:
 - `http://127.0.0.1:8989`
 - `https://host:port`
 - `uds:///run/user/1000/rclipboard.sock`
-- `fifo:///run/user/1000/rclipboard` for standalone FIFO compatibility mode
-
-For parallel FIFO support alongside HTTP/WS/UDS, use:
-
-```bash
-RCLIPBOARD_ENDPOINT=127.0.0.1:8989
-RCLIPBOARD_FIFO_DIR=/run/user/1000/rclipboard
-```
 
 Client-side transport selection:
 
-- default order: `fifo`, then `uds`, then `tcp`
-- env override: `RCLIPCTL_TRANSPORT=auto|fifo|uds|tcp`
-- CLI override: `--transport auto|fifo|uds|tcp`
+- default order: `uds`, then `tcp`
+- env override: `RCLIPCTL_TRANSPORT=auto|uds|tcp`
+- CLI override: `--transport auto|uds|tcp`
 
 Health:
 
@@ -648,7 +640,7 @@ gracefully when Docker is not available or the test image has not been built.
 ## Environment Configuration
 
 **Server:**
-- `RCLIPBOARD_ENDPOINT` — bind address (`host:port`, UDS path, `https://`, `fifo://`)
+- `RCLIPBOARD_ENDPOINT` — bind address (`host:port`, UDS path, `https://`)
 - `RCLIPBOARD_LOG_LEVEL` / `RCLIPBOARD_PY_LOG_LEVEL`
 - `RCLIPBOARD_NOTIFY_DELAY_MS` — debounce delay for `clip.changed` (default: 250)
 - `RCLIPBOARD_RELOAD` — enable uvicorn reload mode
@@ -660,7 +652,7 @@ gracefully when Docker is not available or the test image has not been built.
 - `RCLIPBOARD_ADMIN_TOKEN` — bearer token for `POST /v1/keys.publish`
 
 **Client (`rclipctl`):**
-- `RCLIPCTL_TRANSPORT` — `auto|fifo|uds|tcp`
+- `RCLIPCTL_TRANSPORT` — `auto|uds|tcp`
 - `RCLIPCTL_ENDPOINT`
 - `RCLIPBOARD_AGE_KEY_FILE` — age private key (default: `~/.config/rclipboard/age_key.txt`)
 - `RCLIPBOARD_KNOWN_KEYS_FILE` — recipient public keys file
@@ -675,38 +667,9 @@ fan-out triggered by `clip.put`. Topic state is updated immediately, but the
 broadcast may be delayed and coalesced to the latest value. `clip.get` flushes
 any pending notification for the requested topic before returning.
 
-`rclipctl` chooses transports in this order by default: FIFO, then HTTP over
-UDS, then HTTP over TCP. You can force one of them via
-`RCLIPCTL_TRANSPORT` in the env file or `--transport` on the command line.
-
-## FIFO
-
-FIFO can run in two modes:
-
-- parallel mode via `RCLIPBOARD_FIFO_DIR=DIR` alongside HTTP/WS/UDS
-- standalone compatibility mode via `RCLIPBOARD_ENDPOINT=fifo://DIR`
-
-In directory `DIR` the server maintains:
-
-- `put.<topic>.fifo`
-- `put.<topic>.fifo.json`
-- `state.<topic>`
-- `state.<topic>.json`
-- `topics.json`
-- `status.json`
-- `health.json`
-
-Examples:
-
-```bash
-RCLIPBOARD_ENDPOINT=127.0.0.1:8989 \
-RCLIPBOARD_FIFO_DIR=/tmp/rclipboard \
-.venv/bin/rclipboard
-
-printf 'hello' > /tmp/rclipboard/put.c.fifo
-cat /tmp/rclipboard/state.c
-cat /tmp/rclipboard/state.c.json | jq .
-```
+`rclipctl` chooses transports in this order by default: HTTP over UDS, then
+HTTP over TCP. You can force one of them via `RCLIPCTL_TRANSPORT` in the env
+file or `--transport` on the command line.
 
 ## systemd
 
@@ -744,4 +707,4 @@ systemctl --user enable --now rclipboard-proxy.service
 
 - `README` documents the current implementation contract, not an older compatibility protocol.
 - `docs/api-contract.md` is the source of truth for `params/result/error` models.
-- `xsel` integration is still less mature than HTTP, WS, proxy, and FIFO.
+- `xsel` integration is still less mature than HTTP, WS, and proxy.

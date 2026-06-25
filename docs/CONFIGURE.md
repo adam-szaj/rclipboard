@@ -65,44 +65,7 @@ transport = "uds"
 
 ---
 
-### 3. FIFO transport (shell-script-friendly)
-
-FIFO files let shell scripts read/write clipboard state without a network call.  
-Can run alongside HTTP/WS (parallel mode) or as the only transport.
-
-```toml
-[server]
-endpoint = "127.0.0.1:8989"   # keep HTTP for ws clients
-
-[fifo]
-enabled = true
-dir = "${XDG_RUNTIME_DIR}/rclipboard"
-mode = "rw"                    # "wo" = write-only (server writes, scripts read)
-                               # "rw" = read-write (scripts can also put)
-```
-
-FIFO files created under `dir`:
-- `put.c.fifo` / `put.c.fifo.json` — write to push to topic `c`
-- `state.c` / `state.c.json` — current value snapshots (mode=rw)
-- `health.json`, `status.json`, `topics.json` — status snapshots
-
-**rclipctl with FIFO**
-
-```bash
-rclipctl --transport fifo --fifo "${XDG_RUNTIME_DIR}/rclipboard" get
-```
-
-Or set in config:
-
-```toml
-[client]
-transport = "fifo"
-endpoint  = "fifo://${XDG_RUNTIME_DIR}/rclipboard"
-```
-
----
-
-### 4. X11 clipboard integration (xsel)
+### 3. X11 clipboard integration (xsel)
 
 Keeps the server's topic `c` in sync with the X11 clipboard.
 
@@ -125,7 +88,7 @@ encrypt  = true             # capture via rclipctl exec --encrypt-output
 
 ---
 
-### 5. HTTPS / TLS
+### 4. HTTPS / TLS
 
 **Generate a self-signed certificate**
 
@@ -174,7 +137,7 @@ endpoint = "https://127.0.0.1:8989"
 
 ---
 
-### 6. Proxy mode (two-machine clipboard sharing)
+### 5. Proxy mode (two-machine clipboard sharing)
 
 One machine runs upstream, the other runs a proxy that replicates all topics.
 
@@ -223,7 +186,7 @@ upstream_sync_delay_ms = 3000
 
 ---
 
-### 7. End-to-end encryption (age)
+### 6. End-to-end encryption (age)
 
 The server is a **blind store** — it never sees plaintext. Encryption is entirely client-side using [age](https://github.com/FiloSottile/age).
 
@@ -298,7 +261,7 @@ rclipctl keys-list
 
 ---
 
-### 8. SSH tunnel with proxy automation (rcliptunel)
+### 7. SSH tunnel with proxy automation (rcliptunel)
 
 Connects two machines through an SSH port-forward, then wires up the proxy automatically.
 
@@ -339,7 +302,7 @@ Or via env: `RCLIPBOARD_ADMIN_TOKEN=my-secret-token`.
 
 ---
 
-### 9. Docker / containerised
+### 8. Docker / containerised
 
 **Build**
 
@@ -380,18 +343,13 @@ docker compose up
 
 ```toml
 [server]
-endpoint            = "127.0.0.1:8989"   # host:port | uds://path | https://... | fifo:///dir
+endpoint            = "127.0.0.1:8989"   # host:port | uds://path | https://...
 raw_uds_path        = ""                  # JSON-RPC 2.0 NDJSON socket (empty = disabled)
 log_level           = "warning"           # debug | info | warning | error
 py_log_level        = "WARNING"
 notify_delay_ms     = 250                 # clip.changed debounce (ms)
 admin_token         = ""                  # Bearer token for /v1/keys.publish, proxy.connect
 reload              = false               # uvicorn --reload (dev only)
-
-[fifo]
-enabled             = false
-dir                 = ""                  # path to FIFO directory
-mode                = "wo"               # wo (write-only) | rw (read-write)
 
 [xsel]
 enabled             = false
@@ -413,7 +371,7 @@ keyfile             = ""
 keyfile_password    = ""
 
 [client]
-transport           = ""                  # auto | tcp | uds | fifo (for rclipctl)
+transport           = ""                  # auto | tcp | uds (for rclipctl)
 endpoint            = ""                  # override rclipctl target endpoint
 
 [encryption]

@@ -200,9 +200,6 @@ fi
 # ── Step 7: Write config.toml ─────────────────────────────────────────────────
 section "Step 7: Writing config.toml"
 
-# Protect variables that must stay literal in TOML (config.py expands them at runtime)
-_FIFO_DIR='${XDG_RUNTIME_DIR}/rclipboard'
-
 # Build optional sections as strings to splice in
 _admin_line=""
 if [ -n "$ADMIN_TOKEN" ]; then
@@ -237,11 +234,6 @@ _config_content=$(cat <<EOF
     py_log_level = "WARNING"
     notify_delay_ms = 500
 $_admin_line
-
-[fifo]
-    enabled = true
-    dir = "$_FIFO_DIR"
-    mode = "wo"
 
 [xsel]
     enabled     = $XSEL_ENABLED

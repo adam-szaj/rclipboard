@@ -170,8 +170,7 @@ Both sockets run in the same process and share the same application state
 The HTTP/WS socket is managed by uvicorn. The raw UDS is started inside
 FastAPI's `lifespan` handler so it starts and stops with the application.
 
-It **replaces FIFO** as the low-overhead alternative transport. Like FIFO, it has
-no HTTP overhead, but unlike FIFO:
+It is the low-overhead alternative transport with no HTTP overhead:
 - Supports bidirectional communication (request/response and notifications)
 - Uses the same JSON-RPC 2.0 message format as WebSocket for consistency
 - Can be used for encrypted clipboard entries with proper key exchange

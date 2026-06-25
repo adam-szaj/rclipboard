@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-rclip-systemctl: manage rclipboard user-level systemd units for HTTP/HTTPS/UDS/FIFO
+rclip-systemctl: manage rclipboard user-level systemd units for HTTP/HTTPS/UDS
 listeners and proxy frontends.
 """
 
@@ -43,10 +43,6 @@ class Endpoint:
     def is_uds(self) -> bool:
         return self.scheme == "uds"
 
-    @property
-    def is_fifo(self) -> bool:
-        return self.scheme == "fifo"
-
     def env_value(self) -> str:
         if self.scheme in {"http", "https"}:
             return f"{self.scheme}://{self.host}:{self.port}"
@@ -77,7 +73,7 @@ def parse_endpoint(raw: str, *, expect_port: bool = False) -> Endpoint:
         if not port_raw.isdigit():
             raise ConfigError(f"Invalid endpoint port in '{raw}'")
         return Endpoint(scheme=scheme, host=host or "127.0.0.1", port=int(port_raw))
-    if raw.startswith("uds://") or raw.startswith("fifo://"):
+    if raw.startswith("uds://"):
         scheme, remainder = raw.split("://", 1)
         path = os.path.expandvars(os.path.expanduser(remainder))
         if not path:
@@ -85,8 +81,7 @@ def parse_endpoint(raw: str, *, expect_port: bool = False) -> Endpoint:
         return Endpoint(scheme=scheme, path=path)
     if raw.startswith("/"):
         path = os.path.expandvars(os.path.expanduser(raw))
-        scheme = "fifo" if path.endswith(".fifo") else "uds"
-        return Endpoint(scheme=scheme, path=path)
+        return Endpoint(scheme="uds", path=path)
     if ":" in raw:
         host, port_raw = raw.rsplit(":", 1)
         if not port_raw.isdigit():
@@ -116,8 +111,6 @@ def render_unit(cfg: ServiceConfig) -> str:
     if cfg.proxy:
         env_lines.append("Environment=RCLIPBOARD_PROXY=1")
         if cfg.upstream:
-            if cfg.upstream.is_fifo:
-                raise ConfigError("fifo endpoints are not supported for proxy upstream")
             env_lines.append(
                 f"Environment=RCLIPBOARD_UPSTREAM_ENDPOINT={cfg.upstream.env_value()}"
             )
@@ -195,15 +188,13 @@ def choose_scheme(args: argparse.Namespace, bind: Optional[Endpoint]) -> str:
         scheme_flag = "https" if scheme_flag is None else scheme_flag
     if getattr(args, "uds", False):
         scheme_flag = "uds" if scheme_flag is None else scheme_flag
-    if getattr(args, "fifo", False):
-        scheme_flag = "fifo" if scheme_flag is None else scheme_flag
     if bind:
         if scheme_flag and scheme_flag != bind.scheme:
             raise ConfigError(
-                "Scheme mismatch between --bind and --http/--https/--uds/--fifo")
+                "Scheme mismatch between --bind and --http/--https/--uds")
         return bind.scheme
     if not scheme_flag:
-        raise ConfigError("Specify --bind or one of --http/--https/--uds/--fifo")
+        raise ConfigError("Specify --bind or one of --http/--https/--uds")
     return scheme_flag
 
 
@@ -276,7 +267,7 @@ def handle_status(args: argparse.Namespace) -> None:
 def add_common_service_flags(sp: argparse.ArgumentParser) -> None:
     sp.add_argument(
         "--bind",
-        help="Bind URL (host:port, http://host:port, https://host:port, uds:///path, fifo:///dir)")
+        help="Bind URL (host:port, http://host:port, https://host:port, uds:///path)")
     sp.add_argument("--upstream", help="Upstream URL for proxy mode")
     sp.add_argument("--proxy", action="store_true", help="Enable proxy mode")
     sp.add_argument("--http", action="store_true", help="Target HTTP instance")
@@ -284,7 +275,6 @@ def add_common_service_flags(sp: argparse.ArgumentParser) -> None:
                     action="store_true",
                     help="Target HTTPS instance")
     sp.add_argument("--uds", action="store_true", help="Target UDS instance")
-    sp.add_argument("--fifo", action="store_true", help="Target FIFO instance")
     sp.add_argument("--ssl-keyfile", help="SSL key (HTTPS bind)")
     sp.add_argument("--ssl-certfile", help="SSL cert (HTTPS bind)")
 
@@ -292,7 +282,7 @@ def add_common_service_flags(sp: argparse.ArgumentParser) -> None:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=
-        "Manage rclipboard systemd --user units (http/https/uds/fifo, proxy or direct)."
+        "Manage rclipboard systemd --user units (http/https/uds, proxy or direct)."
     )
     subs = parser.add_subparsers(dest="command", required=True)
 

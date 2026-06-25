@@ -182,7 +182,6 @@ REGISTER_LABEL=""
 HOST=127.0.0.1
 PORT=8989
 UDS=
-FIFO=
 ENDPOINT=
 TRANSPORT_SELECT=auto
 CLI_CONFIGURED=0
@@ -211,11 +210,10 @@ Exec options:
 
 Connection options:
   --config <file>                     path to config.toml
-  --endpoint <url>                    host:port | http://... | uds:///path | fifo:///dir
-  --transport <auto|fifo|uds|tcp>
+  --endpoint <url>                    host:port | http://... | uds:///path
+  --transport <auto|uds|tcp>
   --host <host>  --port <port>
   --uds <socket>
-  --fifo <dir>
 
 Clip options:
   -t|--topic <topic>                              default: c
@@ -268,7 +266,6 @@ fi
 
 # Apply loaded env vars to local variables
 if [ -n "${RCLIPBOARD_ENDPOINT:-}" ];  then ENDPOINT="$RCLIPBOARD_ENDPOINT"; fi
-if [ -n "${RCLIPBOARD_FIFO_DIR:-}" ];  then FIFO="$RCLIPBOARD_FIFO_DIR"; fi
 if [ -z "$ENDPOINT" ] && [ -n "${RCLIPBOARD_BIND_UDS:-}" ]; then
     UDS="$RCLIPBOARD_BIND_UDS"
 fi
@@ -276,7 +273,6 @@ if [ -n "${RCLIPBOARD_BIND_ADDR:-}" ]; then HOST="$RCLIPBOARD_BIND_ADDR"; fi
 if [ -n "${RCLIPBOARD_BIND_PORT:-}" ]; then PORT="$RCLIPBOARD_BIND_PORT"; fi
 if [ -n "${RCLIPCTL_TRANSPORT:-}" ];   then TRANSPORT_SELECT="$RCLIPCTL_TRANSPORT"; fi
 if [ -n "${RCLIPCTL_ENDPOINT:-}" ];    then ENDPOINT="$RCLIPCTL_ENDPOINT"; fi
-if [ -n "${RCLIPCTL_FIFO_DIR:-}" ];    then FIFO="$RCLIPCTL_FIFO_DIR"; fi
 if [ -n "${RCLIPCTL_UDS:-}" ];         then UDS="$RCLIPCTL_UDS"; fi
 if [ -n "${RCLIPCTL_HOST:-}" ];        then HOST="$RCLIPCTL_HOST"; fi
 if [ -n "${RCLIPCTL_PORT:-}" ];        then PORT="$RCLIPCTL_PORT"; fi
@@ -287,7 +283,7 @@ fi
 # ── parse subcommand options ──────────────────────────────────────────────────
 args=$(getopt -o "cpsEet:h" \
     -l "app:,clipboard,primary,secondary,encoded,encrypt,fetch-keys,json,help,encoding:,\
-endpoint:,fifo:,host:,port:,transport:,uds:,topic:,config:,key:,key-file:,token:,label:" \
+endpoint:,host:,port:,transport:,uds:,topic:,config:,key:,key-file:,token:,label:" \
     -- "$@")
 eval set -- "$args"
 
@@ -307,7 +303,6 @@ while true; do
         --json)         json=1;                 shift ;;
         --encoding)     encoding=$2;            shift 2 ;;
         --endpoint)     ENDPOINT=$2; CLI_CONFIGURED=1; shift 2 ;;
-        --fifo)         FIFO=$2;    CLI_CONFIGURED=1; shift 2 ;;
         --transport)    TRANSPORT_SELECT=$2;    shift 2 ;;
         -a|--app)       app=$2;                 shift 2 ;;
         --host)         HOST=$2;    CLI_CONFIGURED=1; shift 2 ;;
@@ -321,10 +316,8 @@ while true; do
 done
 
 # ── transport resolution ──────────────────────────────────────────────────────
-CLI_FIFO=
 CLI_UDS=
 CLI_TCP=
-ENV_FIFO=
 ENV_UDS=
 ENV_TCP=
 
@@ -338,8 +331,6 @@ parse_endpoint_to_candidate() {
             printf -v "${target}" '%s' "$raw" ;;
         uds://*)
             printf -v "${target}" '%s' "${raw#uds://}" ;;
-        fifo://*)
-            printf -v "${target}" '%s' "${raw#fifo://}" ;;
         /*)
             printf -v "${target}" '%s' "$raw" ;;
         *:*)
@@ -354,19 +345,12 @@ resolve_candidates() {
     if [ "$CLI_CONFIGURED" = "1" ]; then
         if [ -n "$ENDPOINT" ]; then
             case "$ENDPOINT" in
-                fifo://*)
-                    parse_endpoint_to_candidate CLI_FIFO "$ENDPOINT" ;;
                 uds://*|/*)
-                    if [ "${ENDPOINT#uds://}" != "$ENDPOINT" ] || [ ! -d "$ENDPOINT" ]; then
-                        parse_endpoint_to_candidate CLI_UDS "$ENDPOINT"
-                    else
-                        parse_endpoint_to_candidate CLI_FIFO "$ENDPOINT"
-                    fi ;;
+                    parse_endpoint_to_candidate CLI_UDS "$ENDPOINT" ;;
                 http://*|https://*|*:*)
                     parse_endpoint_to_candidate CLI_TCP "$ENDPOINT" ;;
             esac
         fi
-        if [ -n "$FIFO" ]; then CLI_FIFO="$FIFO"; fi
         if [ -n "$UDS" ];  then CLI_UDS="$UDS"; fi
         if [ -n "$HOST" ] || [ -n "$PORT" ]; then CLI_TCP="http://${HOST}:${PORT}"; fi
         return
@@ -374,31 +358,22 @@ resolve_candidates() {
 
     if [ -n "$ENDPOINT" ]; then
         case "$ENDPOINT" in
-            fifo://*)
-                parse_endpoint_to_candidate ENV_FIFO "$ENDPOINT" ;;
             uds://*|/*)
-                if [ "${ENDPOINT#uds://}" != "$ENDPOINT" ] || [ ! -d "$ENDPOINT" ]; then
-                    parse_endpoint_to_candidate ENV_UDS "$ENDPOINT"
-                else
-                    parse_endpoint_to_candidate ENV_FIFO "$ENDPOINT"
-                fi ;;
+                parse_endpoint_to_candidate ENV_UDS "$ENDPOINT" ;;
             http://*|https://*|*:*)
                 parse_endpoint_to_candidate ENV_TCP "$ENDPOINT" ;;
         esac
     fi
     if [ -n "$UDS" ];  then ENV_UDS="$UDS"; fi
     if [ -z "$ENV_TCP" ]; then ENV_TCP="http://${HOST}:${PORT}"; fi
-    if [ -n "$FIFO" ]; then ENV_FIFO="$FIFO"; fi
 }
 
 select_transport() {
-    local fifo_candidate uds_candidate tcp_candidate
+    local uds_candidate tcp_candidate
     if [ "$CLI_CONFIGURED" = "1" ]; then
-        fifo_candidate="$CLI_FIFO"
         uds_candidate="$CLI_UDS"
         tcp_candidate="$CLI_TCP"
     else
-        fifo_candidate="$ENV_FIFO"
         uds_candidate="$ENV_UDS"
         tcp_candidate="$ENV_TCP"
     fi
@@ -409,14 +384,9 @@ select_transport() {
                 TRANSPORT=uds;  UDS_PATH="$uds_candidate"
             elif [ -n "$tcp_candidate" ]; then
                 TRANSPORT=tcp;  BASE="$tcp_candidate"
-            elif [ -n "$fifo_candidate" ]; then
-                TRANSPORT=fifo; FIFO_DIR="$fifo_candidate"
             else
                 echo "no usable transport configured" >&2; exit 2
             fi ;;
-        fifo)
-            [ -z "$fifo_candidate" ] && { echo "fifo transport requested but not configured" >&2; exit 2; }
-            TRANSPORT=fifo; FIFO_DIR="$fifo_candidate" ;;
         uds)
             [ -z "$uds_candidate" ] && { echo "uds transport requested but not configured" >&2; exit 2; }
             TRANSPORT=uds; UDS_PATH="$uds_candidate" ;;
@@ -442,25 +412,6 @@ if [ -z "${app:-}" ]; then app=rclipctl; fi
 
 # ── HTTP helpers ──────────────────────────────────────────────────────────────
 endpoint_url() { echo "${BASE}${1}"; }
-
-fifo_path() {
-    local kind="$1"
-    case "$kind" in
-        put_raw)   echo "${FIFO_DIR}/put.${topic}.fifo" ;;
-        put_json)  echo "${FIFO_DIR}/put.${topic}.fifo.json" ;;
-        state_raw) echo "${FIFO_DIR}/state.${topic}" ;;
-        state_json)echo "${FIFO_DIR}/state.${topic}.json" ;;
-        topics)    echo "${FIFO_DIR}/topics.json" ;;
-        status)    echo "${FIFO_DIR}/status.json" ;;
-        health)    echo "${FIFO_DIR}/health.json" ;;
-    esac
-}
-
-ensure_fifo_dir() {
-    if [ ! -d "$FIFO_DIR" ]; then
-        echo "fifo endpoint directory does not exist: $FIFO_DIR" >&2; exit 2
-    fi
-}
 
 # ── encryption helpers ────────────────────────────────────────────────────────
 require_age() {
@@ -507,7 +458,6 @@ encrypt_value() {
 
 # ── clip put ──────────────────────────────────────────────────────────────────
 call_put() {
-    if [ "${TRANSPORT:-}" = "fifo" ]; then call_put_fifo; return; fi
     local url; url=$(endpoint_url "/v1/clip.put")
 
     local input_enc="${encoding}"
@@ -573,7 +523,6 @@ resolve_output_encoding() {
 }
 
 call_get() {
-    if [ "${TRANSPORT:-}" = "fifo" ]; then call_get_fifo; return; fi
     local url; url=$(endpoint_url "/v1/clip.get")
     body=$(jq -cn --arg topic "$topic" '{topic: $topic}')
 
@@ -646,49 +595,16 @@ call_keys_list() {
 
 # ── status / topics / health ──────────────────────────────────────────────────
 call_status() {
-    if [ "${TRANSPORT:-}" = "fifo" ]; then ensure_fifo_dir; jq -c . "$(fifo_path status)"; return; fi
     curl "${CURL_SOCK_OPTS[@]}" -fsS "${BASE}/v1/status.get" | jq -c
 }
 
 call_topics() {
-    if [ "${TRANSPORT:-}" = "fifo" ]; then ensure_fifo_dir; jq -c . "$(fifo_path topics)"; return; fi
     curl "${CURL_SOCK_OPTS[@]}" -fsS -X POST "${BASE}/v1/topics.list" \
         -H 'Content-Type: application/json' --data-binary '{}' | jq -c
 }
 
 call_health() {
-    if [ "${TRANSPORT:-}" = "fifo" ]; then ensure_fifo_dir; jq -c . "$(fifo_path health)"; return; fi
     curl "${CURL_SOCK_OPTS[@]}" -fsS "${BASE}/v1/health.get" | jq -c
-}
-
-# ── FIFO put / get ────────────────────────────────────────────────────────────
-call_put_fifo() {
-    local path; path=$(fifo_path put_raw)
-    ensure_fifo_dir
-    if [ ! -p "$path" ]; then mkfifo "$path"; fi
-
-    local transform_cmd='cat'
-    if [ "$encoded" = "1" ]; then
-        if [ "${encoding:-base64}" = "base64" ]; then
-            transform_cmd='base64 -d -'
-        elif [ "$encoding" = "hex" ]; then
-            transform_cmd='xxd -r -p'
-        else
-            echo "unsupported encoded input for fifo put: ${encoding}" >&2; exit 2
-        fi
-    fi
-    bash -lc "${transform_cmd}" > "$path"
-}
-
-call_get_fifo() {
-    ensure_fifo_dir
-    if [ "$json" = "1" ]; then jq -c . "$(fifo_path state_json)"; return; fi
-
-    local path; path=$(fifo_path state_raw)
-    if [ ! -f "$path" ]; then echo "topic state not found: $topic" >&2; exit 1; fi
-
-    resolve_output_encoding
-    cat "$path" | encode "${encoding}"
 }
 
 # ── monitor ───────────────────────────────────────────────────────────────────

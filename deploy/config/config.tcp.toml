@@ -10,11 +10,6 @@
     notify_delay_ms = 500
     # admin_token = ""
 
-[fifo]
-    enabled = false
-    dir     = "${XDG_RUNTIME_DIR}/rclipboard"
-    mode    = "wo"
-
 [xsel]
     enabled     = false
     path        = "/usr/bin/xsel"
