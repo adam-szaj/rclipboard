@@ -1,5 +1,7 @@
 import argparse
+import contextlib
 import os
+import socket
 import sys
 from pathlib import Path
 
@@ -7,6 +9,29 @@ import uvicorn
 
 from rclipboard.helpers import bind_endpoint_from_env
 from rclipboard.main import create_app
+
+
+class _RclipboardServer(uvicorn.Server):
+    """uvicorn Server that notifies clients before tearing connections down.
+
+    uvicorn's Server.shutdown() closes every connection (sending WS close 1012)
+    *before* it runs the app's lifespan shutdown, so a "server.shutdown" notice
+    sent from the lifespan hook arrives after the socket is already closing. We
+    override shutdown() to broadcast the notice first — while the WS / raw-UDS /
+    proxy-upstream sockets are still alive — then defer to the normal teardown.
+    """
+
+    async def shutdown(self, sockets: list[socket.socket] | None = None) -> None:
+        # NB: `import rclipboard.main` resolves to the `main` *function* on this
+        # package (it shadows the submodule), so use importlib to get the module
+        # and its FastAPI `app` whose state holds the AppState.
+        import importlib
+        main_mod = importlib.import_module("rclipboard.main")
+        app_state = getattr(main_mod.app.state, "main", None)
+        if app_state is not None:
+            with contextlib.suppress(Exception):
+                await app_state.broadcast_shutdown()
+        await super().shutdown(sockets=sockets)
 
 
 def _run_config_cmd(argv: list[str]) -> None:
@@ -81,5 +106,5 @@ def main() -> None:
         timeout_graceful_shutdown=graceful_timeout,
     )
 
-    server = uvicorn.Server(config)
+    server = _RclipboardServer(config)
     server.run()

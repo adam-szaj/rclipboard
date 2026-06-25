@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import time
 import unittest
 
 import websockets
 
-from tests.helpers import free_port, running_server
+from tests.helpers import free_port, running_server, start_server, stop_process, wait_http_ready
 
 
 class FunctionalWebSocketTests(unittest.IsolatedAsyncioTestCase):
@@ -111,6 +113,61 @@ class FunctionalWebSocketTests(unittest.IsolatedAsyncioTestCase):
             compact = event.replace(" ", "")
             self.assertIn('"method":"clip.changed"', compact)
             self.assertIn('"value":"hello-throttle"', compact)
+
+
+class ShutdownNoticeTests(unittest.IsolatedAsyncioTestCase):
+    async def test_shutdown_notice_and_fast_exit(self):
+        # Manage the server by hand so we can SIGTERM it and time the exit.
+        port = free_port()
+        proc = start_server(port=port)
+        try:
+            wait_http_ready(port)
+            uri = f"ws://127.0.0.1:{port}/ws"
+            monitor_uri = f"ws://127.0.0.1:{port}/v1/monitor.stream"
+
+            async with websockets.connect(uri) as watcher, \
+                    websockets.connect(monitor_uri) as monitor:
+                # WS watcher: subscribe so the connection is a live RPC client.
+                await watcher.send(
+                    '{"jsonrpc":"2.0","id":"w","method":"clip.watch","params":{"topics":["c"]}}'
+                )
+                await asyncio.wait_for(watcher.recv(), timeout=5)
+
+                # Monitor: drain the initial snapshot frame.
+                snap = json.loads(await asyncio.wait_for(monitor.recv(), timeout=5))
+                self.assertEqual(snap.get("kind"), "snapshot")
+
+                # Trigger shutdown (SIGTERM) and time how long the process takes to exit.
+                t0 = time.monotonic()
+                proc.terminate()
+
+                # WS watcher receives the server.shutdown notification.
+                notice = json.loads(await asyncio.wait_for(watcher.recv(), timeout=5))
+                self.assertEqual(notice.get("method"), "server.shutdown")
+                self.assertIn("reason", notice.get("params", {}))
+                self.assertIn("ts_utc", notice.get("params", {}))
+
+                # Then the connection is actively closed by the server.
+                with self.assertRaises(websockets.exceptions.ConnectionClosed):
+                    await asyncio.wait_for(watcher.recv(), timeout=5)
+
+                # Monitor receives the service.stop event, then closes.
+                got_service_stop = False
+                with self.assertRaises(websockets.exceptions.ConnectionClosed):
+                    while True:
+                        frame = json.loads(await asyncio.wait_for(monitor.recv(), timeout=5))
+                        if frame.get("kind") == "service.stop":
+                            got_service_stop = True
+                self.assertTrue(got_service_stop, "monitor never received service.stop")
+
+            # Process must exit promptly because connections self-closed — far
+            # below any graceful-shutdown timeout. (Harness runs uvicorn with the
+            # default infinite graceful timeout, so a hang here would block ~forever.)
+            proc.wait(timeout=10)
+            elapsed = time.monotonic() - t0
+            self.assertLess(elapsed, 5.0, f"shutdown took {elapsed:.2f}s — too slow")
+        finally:
+            stop_process(proc)
 
 
 if __name__ == "__main__":

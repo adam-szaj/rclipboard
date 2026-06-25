@@ -311,6 +311,7 @@ class MonitorEventKind(str, Enum):
     TOPIC_NOTIFY        = "topic.notify"
     PROXY_CONNECTED     = "proxy.connected"
     PROXY_DISCONNECTED  = "proxy.disconnected"
+    SERVICE_STOP        = "service.stop"
 
 
 @dataclass

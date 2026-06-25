@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import time
 import unittest
 
 from tests.helpers import (
     free_port,
     post_json,
     running_server,
+    start_server,
+    stop_process,
+    wait_http_ready,
     wait_for_value,
 )
 
@@ -66,6 +70,30 @@ class ProxyIntegrationTests(unittest.TestCase):
         self.assertEqual(status, 200)
         upstream = wait_for_value(self.upstream_port, "p", "from-proxy")
         self.assertEqual(upstream["item"]["value"], "from-proxy")
+
+
+class ProxyShutdownTests(unittest.TestCase):
+    def test_proxy_stops_promptly_with_live_upstream(self):
+        # A proxy holds an open upstream WebSocket. On SIGTERM the proxy must
+        # broadcast server.shutdown (to the upstream, via ProxyClient) and exit
+        # promptly — the upstream link must not turn shutdown into a hang.
+        upstream_port = free_port()
+        proxy_port = free_port()
+        with running_server(port=upstream_port, proxy=False):
+            proxy = start_server(
+                port=proxy_port, proxy=True, upstream_port=upstream_port
+            )
+            try:
+                wait_http_ready(proxy_port)
+                # Let the proxy establish its upstream connection.
+                time.sleep(0.5)
+                t0 = time.monotonic()
+                proxy.terminate()
+                proxy.wait(timeout=10)
+                elapsed = time.monotonic() - t0
+                self.assertLess(elapsed, 5.0, f"proxy shutdown took {elapsed:.2f}s")
+            finally:
+                stop_process(proxy)
 
 
 if __name__ == "__main__":

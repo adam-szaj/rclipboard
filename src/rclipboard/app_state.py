@@ -174,6 +174,47 @@ class AppState:
         import datetime
         return datetime.datetime.now(datetime.timezone.utc).isoformat()
 
+    async def broadcast_shutdown(self, reason: str = "server shutting down") -> None:
+        """Tell every connected client/upstream we are stopping.
+
+        Sends a fire-and-forget ``server.shutdown`` JSON-RPC notification to all
+        RPC-capable clients (WS, raw UDS) and to the proxy upstream, and emits a
+        ``service.stop`` monitor event. Called from ``_RclipboardServer.shutdown``
+        (rclipboard/__init__.py) *before* uvicorn closes the connections, so the
+        notice lands while the sockets are still alive.
+
+        RPC notices are written straight to each socket. Monitor events go through
+        the per-subscriber queue, so we briefly wait for those queues to drain
+        (bounded) — otherwise uvicorn's connection-close (1012) could race ahead of
+        the ``service.stop`` delivery.
+        """
+        # Lazy import: rpc_handler imports app_state, so importing at module
+        # scope would be circular.
+        from rclipboard.rpc_handler import RPCHandler
+        ts = self._utcnow()
+        params = {"reason": reason, "ts_utc": ts}
+        for client in list(self.clients):  # snapshot — sending may mutate clients
+            if isinstance(client, RPCHandler):
+                try:
+                    await client._send_event("server.shutdown", params)
+                except Exception:
+                    pass  # dead/closed connection — ignore during shutdown
+        self._emit_monitor(MonitorEvent(
+            kind=MonitorEventKind.SERVICE_STOP,
+            ts=asyncio.get_event_loop().time(),
+            ts_utc=ts,
+            conn_id=None,
+            data={"reason": reason},
+        ))
+        # Let monitor handlers consume + flush their queues (and self-close) before
+        # the caller proceeds to uvicorn's connection teardown. Bounded so a stuck
+        # consumer can't delay shutdown.
+        deadline = asyncio.get_event_loop().time() + 1.0
+        while any(not q.empty() for q in self._monitor_subs):
+            if asyncio.get_event_loop().time() >= deadline:
+                break
+            await asyncio.sleep(0.01)
+
     # ── Client lifecycle ──────────────────────────────────────────────────────
 
     def subscribe_client(self, client: Interface,

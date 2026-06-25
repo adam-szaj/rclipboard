@@ -233,13 +233,14 @@ The `rclipboard config env` command prints all resolved environment variables (a
    - Each module registers as a `BidirectionalInterface` subscriber
    - Drainer tasks are started automatically via `start_drainer()` in `register_client()`
 4. On shutdown:
+   - **Shutdown notice (first, before connections close)** — the server runs as `_RclipboardServer` (a `uvicorn.Server` subclass in `__init__.py`) whose `shutdown()` calls `AppState.broadcast_shutdown()` *before* `super().shutdown()`. uvicorn closes connections (WS close 1012) only inside `super().shutdown()`, so doing this first means clients are notified while their sockets are still alive. The broadcast sends a `server.shutdown` JSON-RPC notification to every RPC client (WS `/ws`, raw UDS) and to the proxy upstream (all `RPCHandler` subclasses in `AppState.clients`), and emits a `service.stop` monitor event to `/v1/monitor.stream` subscribers. The monitor handler self-closes on `service.stop`; `broadcast_shutdown` briefly waits (bounded ~1 s) for the monitor queues to drain so delivery wins the race against uvicorn's 1012 close.
    - Cancel background tasks (fire-and-forget tasks tracked in `AppState._background_tasks`)
    - Flush pending notifications
    - Use `TaskGroup` to shut down proxy/xsel/raw UDS modules in parallel
    - Each shutdown calls `stop_drainer()` before unregister to drain queued updates
    - Cancel the dispatcher task last
    - HTTP/WS server shuts down implicitly when lifespan exits
-   - uvicorn runs the lifespan shutdown only *after* draining open connections; a long-lived subscriber (e.g. the monitor's `/v1/monitor.stream` WebSocket, parked in `await q.get()`) keeps its ASGI task alive in `server_state.tasks` and would block shutdown forever. `RCLIPBOARD_GRACEFUL_TIMEOUT_S` (default 8) bounds that wait — uvicorn force-cancels the lingering tasks and exits well before systemd's `TimeoutStopSec` (set to 20 s in the user unit as a backstop)
+   - uvicorn runs the lifespan shutdown only *after* draining open connections; a long-lived subscriber (e.g. the monitor's `/v1/monitor.stream` WebSocket, parked in `await q.get()`) keeps its ASGI task alive in `server_state.tasks`. The `server.shutdown`/`service.stop` notice (above) makes clients/handlers disconnect promptly, so connections drain in well under a second; `RCLIPBOARD_GRACEFUL_TIMEOUT_S` (default 8) is now a **backstop** — if a handler still lingers, uvicorn force-cancels it after the timeout, well before systemd's `TimeoutStopSec` (20 s in the user unit)
 
 ### CLI (`scripts/bin/rclipctl`)
 
@@ -358,5 +359,9 @@ logging in at the console never leaks their `DISPLAY` into this server. The main
 See `docs/api-contract.md` for the full JSON-RPC 2.0 method specs (`clip.put`, `clip.get`, `clip.watch`, `clip.unwatch`, `topics.list`, `health.get`, `status.get`) and the `ClipboardItem` schema. All methods are available on HTTP, WebSocket, and raw UDS transports (with HTTP using REST conventions).
 
 Additional HTTP-only endpoints: `POST /v1/keys.publish`, `GET /v1/keys.list`.
+
+**Server-sent notifications** (no `id`, fire-and-forget, delivered on WS / raw UDS / proxy-upstream connections):
+- `clip.changed` — a watched topic changed (`params`: `{items, meta}`).
+- `server.shutdown` — the server is stopping; the peer should disconnect (`params`: `{reason, ts_utc}`). Sent during shutdown before connections are torn down (see "On shutdown" above). The monitor stream receives the equivalent as a `service.stop` event frame.
 
 

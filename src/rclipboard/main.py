@@ -43,6 +43,11 @@ async def startup(app: FastAPI):
 
 
 async def shutdown(app: FastAPI):
+    # NOTE: the "server.shutdown" / "service.stop" broadcast to connected clients
+    # happens earlier, in _RclipboardServer.shutdown() (rclipboard/__init__.py),
+    # BEFORE uvicorn closes the WS connections — see that subclass for why. Here
+    # we only tear down our own modules.
+    main: AppState = app.state.main
     xsel_enabled = os.environ.get("RCLIPBOARD_XSEL", "0") != "0"
     raw_uds_enabled = bool(os.environ.get("RCLIPBOARD_RAW_UDS_PATH", "").strip())
     async with asyncio.TaskGroup() as tg:
@@ -52,7 +57,6 @@ async def shutdown(app: FastAPI):
         if xsel_enabled:
             tg.create_task(xsel_mod.shutdown_xsel(app))
 
-    main: AppState = app.state.main
     await main.cancel_background_tasks()
     await main.flush_all_notifications()
     task = main.dispatcher_task

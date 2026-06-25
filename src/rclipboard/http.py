@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import datetime
 import hashlib
 import os
@@ -24,6 +25,7 @@ from rclipboard.types import (
     KeyPublishParams,
     KeyPublishResult,
     KeysListResult,
+    MonitorEventKind,
     ProxyConnectParams,
     ProxyConnectResult,
     ProxyDisconnectResult,
@@ -286,6 +288,13 @@ def install_module(app: FastAPI):
                     "topic": event.topic,
                     "data": event.data,
                 })
+                if event.kind == MonitorEventKind.SERVICE_STOP:
+                    # Server is shutting down — deliver the notice, then close so
+                    # this handler returns and its task leaves server_state.tasks
+                    # (otherwise it stays parked in `await q.get()` forever).
+                    with contextlib.suppress(Exception):
+                        await ws.close(code=1001)  # going away
+                    break
         except WebSocketDisconnect:
             pass
         finally:

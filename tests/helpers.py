@@ -51,23 +51,16 @@ def start_server(
         env["RCLIPBOARD_UPSTREAM_ENDPOINT"] = f"127.0.0.1:{upstream_port or 0}"
     else:
         env["RCLIPBOARD_PROXY"] = "0"
+    if ssl_certfile and ssl_keyfile:
+        env["RCLIPBOARD_SSL_CERTFILE"] = str(ssl_certfile)
+        env["RCLIPBOARD_SSL_KEYFILE"] = str(ssl_keyfile)
     if extra_env:
         env.update(extra_env)
 
-    cmd = [
-        sys.executable,
-        "-m",
-        "uvicorn",
-        "rclipboard.main:app",
-        "--host",
-        "127.0.0.1",
-        "--port",
-        str(port),
-        "--log-level",
-        "warning",
-    ]
-    if ssl_certfile and ssl_keyfile:
-        cmd += ["--ssl-certfile", str(ssl_certfile), "--ssl-keyfile", str(ssl_keyfile)]
+    # Launch via the real entry point (rclipboard.__init__:main) — same path
+    # systemd uses — so the _RclipboardServer subclass (shutdown-notice broadcast)
+    # is exercised. Bind address / SSL come from RCLIPBOARD_* env, not CLI flags.
+    cmd = [sys.executable, "-c", "from rclipboard import main; main()"]
 
     return subprocess.Popen(
         cmd,
