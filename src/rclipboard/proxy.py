@@ -491,10 +491,14 @@ async def shutdown_proxy(app: FastAPI) -> None:
     task = getattr(app.state, "proxy_task", None)
     if not task:
         return
+    # Disable auto-reconnect first so loop termination doesn't rely on
+    # cancellation timing relative to run()'s `if not self.reconnect` check.
+    client: ProxyClient | None = getattr(app.state, "proxy_client", None)
+    if client:
+        client.reconnect = False
     task.cancel()
     with contextlib.suppress(a.CancelledError):
         await task
-    client: ProxyClient | None = getattr(app.state, "proxy_client", None)
     if client:
         unsubscribe_client(app, client, list(client.topics))
         await client.stop_drainer()

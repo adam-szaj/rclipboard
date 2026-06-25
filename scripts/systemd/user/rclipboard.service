@@ -10,6 +10,10 @@ WorkingDirectory=%h/.config/rclipboard
 ExecStart=%h/.config/rclipboard/venv/bin/rclipboard
 Restart=on-failure
 RestartSec=1s
+# Backstop: with RCLIPBOARD_GRACEFUL_TIMEOUT_S the process exits in ~8s, so this
+# never fires in normal operation. It caps worst-case SIGKILL escalation at 20s
+# (instead of the 90s default) if a future regression re-hangs shutdown.
+TimeoutStopSec=20s
 
 [Install]
 WantedBy=default.target

@@ -57,6 +57,16 @@ def main() -> None:
             "https endpoint requires RCLIPBOARD_SSL_CERTFILE and RCLIPBOARD_SSL_KEYFILE"
         )
 
+    # Bound uvicorn's graceful-shutdown wait. Without this, uvicorn waits
+    # indefinitely for lingering connections (e.g. a persistent /ws watcher) to
+    # close on SIGTERM, so the process never exits and systemd escalates to
+    # SIGKILL after TimeoutStopSec. A finite value makes uvicorn force-cancel
+    # those connection tasks and exit cleanly.
+    try:
+        graceful_timeout = int(os.environ.get("RCLIPBOARD_GRACEFUL_TIMEOUT_S", "8"))
+    except ValueError:
+        graceful_timeout = 8
+
     config = uvicorn.Config(
         app="rclipboard.main:app",
         host="" if endpoint.scheme == "uds" or args.fd is not None else endpoint.host or "127.0.0.1",
@@ -68,6 +78,7 @@ def main() -> None:
         ssl_keyfile_password=ssl_keyfile_password,
         log_level=os.environ.get("RCLIPBOARD_LOG_LEVEL", "info"),
         reload=os.environ.get("RCLIPBOARD_RELOAD", "0") in {"1", "true", "True"},
+        timeout_graceful_shutdown=graceful_timeout,
     )
 
     server = uvicorn.Server(config)

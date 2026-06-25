@@ -126,6 +126,7 @@ Both the main server and a proxy may already hold buffered topics in memory when
 | `RCLIPCTL_PATH` | Path to `rclipctl` binary used by xsel encrypt mode (default: `rclipctl`) |
 | `RCLIPBOARD_NOTIFY_DELAY_MS` | Notification debounce delay (default: 250) |
 | `RCLIPBOARD_SYNC_TIE_MS` | Tie window (ms) for time-based conflict resolution; timestamps within it are a tie → local wins (default: 100) |
+| `RCLIPBOARD_GRACEFUL_TIMEOUT_S` | Bounded uvicorn graceful-shutdown wait (seconds) on SIGTERM before lingering connection tasks are force-cancelled so the process exits; default 8 |
 | `RCLIPBOARD_LOG_LEVEL` | App log level |
 | `RCLIPBOARD_PY_LOG_LEVEL` | Python logging level override |
 | `RCLIPBOARD_SSL_CERTFILE/KEYFILE` | Paths to TLS cert/key for HTTPS |
@@ -157,6 +158,12 @@ py_log_level = "INFO"
 
 # Debounce delay for clip.changed notifications (milliseconds)
 notify_delay_ms = 250
+
+# Bounded uvicorn graceful-shutdown wait (seconds) on SIGTERM. Without a finite
+# value uvicorn waits forever for a lingering connection (e.g. the monitor's
+# /v1/monitor.stream WebSocket) to close, so the service never stops cleanly and
+# systemd SIGKILLs it after TimeoutStopSec.
+graceful_timeout_s = 8
 
 # Development: enable uvicorn auto-reload on file changes
 reload = false
@@ -232,6 +239,7 @@ The `rclipboard config env` command prints all resolved environment variables (a
    - Each shutdown calls `stop_drainer()` before unregister to drain queued updates
    - Cancel the dispatcher task last
    - HTTP/WS server shuts down implicitly when lifespan exits
+   - uvicorn runs the lifespan shutdown only *after* draining open connections; a long-lived subscriber (e.g. the monitor's `/v1/monitor.stream` WebSocket, parked in `await q.get()`) keeps its ASGI task alive in `server_state.tasks` and would block shutdown forever. `RCLIPBOARD_GRACEFUL_TIMEOUT_S` (default 8) bounds that wait — uvicorn force-cancels the lingering tasks and exits well before systemd's `TimeoutStopSec` (set to 20 s in the user unit as a backstop)
 
 ### CLI (`scripts/bin/rclipctl`)
 
