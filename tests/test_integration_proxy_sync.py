@@ -150,5 +150,74 @@ class WatchHandshakeClockTests(unittest.TestCase):
         self.assertTrue(reply["result"]["server_now_utc"])
 
 
+class InitialSyncEncodingTests(unittest.TestCase):
+    """The clip.watch initial-sync reply must preserve value type/encoding.
+
+    Regression for the proxy double-base64 bug: a base64/binary item that
+    already exists on the upstream *before* the proxy connects is replicated
+    via the clip.watch reply, which ships a raw ValueData. If that ValueData
+    round-trips through the default (field-name) JSON dump without
+    populate_by_name, the type/encoding aliases are lost and the value is
+    mislabeled text/plain, causing consumers to base64-encode it a second time.
+    """
+
+    def _get_full(self, port: int, topic: str):
+        # /v1/clip/{topic} returns the internal TopicData, including
+        # value.encoding / value.type, so we can assert they survived the sync.
+        return get_json(f"http://127.0.0.1:{port}/v1/clip/{topic}")
+
+    def test_base64_item_synced_before_connect_keeps_encoding(self):
+        upstream_port = free_port()
+        proxy_port = free_port()
+
+        # base64("hi\x00\xff") — a binary value that MUST stay base64/binary.
+        b64_value = "aGkA/w=="
+
+        upstream_ctx = running_server(port=upstream_port, proxy=False)
+        upstream_ctx.__enter__()
+        try:
+            # Put the item on the upstream BEFORE the proxy exists, so it is
+            # replicated through the clip.watch initial-sync path (not
+            # clip.changed).
+            status, _ = post_json(
+                f"http://127.0.0.1:{upstream_port}/v1/clip.put",
+                {
+                    "items": [
+                        {"topic": "c", "mime": "application/octet-stream",
+                         "encoding": "base64", "value": b64_value}
+                    ],
+                    "meta": {"ts": NEW_TS},
+                },
+            )
+            self.assertEqual(status, 200)
+
+            proxy_ctx = running_server(
+                port=proxy_port, proxy=True, upstream_port=upstream_port)
+            proxy_ctx.__enter__()
+            try:
+                # Wait until the proxy has ingested the initial-sync value.
+                deadline = time.monotonic() + 10.0
+                body = None
+                while time.monotonic() < deadline:
+                    status, body = self._get_full(proxy_port, "c")
+                    if status == 200 and isinstance(body, dict):
+                        break
+                    time.sleep(0.1)
+                self.assertEqual(status, 200, f"proxy never synced: {body!r}")
+                assert isinstance(body, dict)
+
+                value = body["value"]
+                # The value string is stored exactly once (single base64) ...
+                self.assertEqual(value["value"], b64_value)
+                # ... and, crucially, the encoding/type labels survived the
+                # clip.watch reply round-trip (were previously lost -> plain/text).
+                self.assertEqual(value["encoding"], "base64")
+                self.assertEqual(value["type"], "binary")
+            finally:
+                proxy_ctx.__exit__(None, None, None)
+        finally:
+            upstream_ctx.__exit__(None, None, None)
+
+
 if __name__ == "__main__":
     unittest.main()

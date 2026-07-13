@@ -80,6 +80,15 @@ class BidirectionalInterface(Interface):
 
 
 class ValueData(BaseModel):
+    # Accept both the field name and the alias on input. The RPC result path
+    # (rpc_handler.handle_request) serializes with default field names
+    # (value_type/value_encoding), while ws/uds dump by alias (type/encoding).
+    # Without populate_by_name, re-parsing a field-name payload silently falls
+    # back to the defaults (text/plain), which mislabels base64/binary values
+    # as plain text and causes double base64-encoding on the proxy initial
+    # sync (clip.watch reply carries a raw ValueData).
+    model_config = ConfigDict(populate_by_name=True)
+
     value: str
     value_type: Literal["text", "binary"] = Field(alias="type", default="text")
     value_encoding: Literal["plain", "hex", "base64"] = Field(alias="encoding",
