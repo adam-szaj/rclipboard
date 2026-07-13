@@ -1,8 +1,22 @@
 """Conversions between the wire ClipboardItem and the internal TopicData."""
 from pydantic import JsonValue
 
-from rclipboard.models.wire import ClipboardItem, TopicData
+from rclipboard.models.wire import ClipboardItem, TopicData, ValueData
 from rclipboard.timeutil import utc_timestamp
+
+
+def stub_topic_data(data: TopicData) -> TopicData:
+    """Replace the value with an empty stub pointing at the HTTP fetch URL.
+
+    Used by every lazy-value path (local dispatch, watch reply, proxy ingest)
+    when a payload exceeds the relevant threshold: the receiver fetches the
+    full value on demand via ``fetch_url``.
+    """
+    return data.model_copy(update={
+        "value": ValueData(value="", type="text", encoding="plain"),
+        "stub": True,
+        "fetch_url": f"/v1/clip/{data.topic}",
+    })
 
 
 def topic_data_to_clipboard_item(data: TopicData) -> ClipboardItem:

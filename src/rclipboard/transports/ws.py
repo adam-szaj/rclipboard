@@ -8,8 +8,9 @@ from pydantic import JsonValue, ValidationError
 
 from rclipboard.app_state import register_client, unregister_client, unsubscribe_client
 from rclipboard.log import get_logger as gl
+from rclipboard.models.rpc import notification_payload, response_payload
 from rclipboard.transports.rpc_handler import RPCHandler
-from rclipboard.types import JSONRPCRequestMessage, JSONRPCResponseMessage, RPCError
+from rclipboard.types import JSONRPCRequestMessage, RPCError
 
 logger = gl(__name__)
 error = logger.error
@@ -34,34 +35,16 @@ class WSServerConnection(RPCHandler):
                            result: JsonValue) -> None:
         if request_id is None:
             return
-        await self.ws.send_json(
-            JSONRPCResponseMessage(
-                **{
-                    "id": request_id
-                },
-                jsonrpc="2.0",
-                result=result,
-            ).model_dump(by_alias=True, mode="json", exclude_none=True))
+        await self.ws.send_json(response_payload(request_id, result=result))
 
     async def _send_error(self, request_id: int | str | None,
                           rpc_error: RPCError) -> None:
         if request_id is None:
             return
-        await self.ws.send_json(
-            JSONRPCResponseMessage(
-                **{
-                    "id": request_id
-                },
-                jsonrpc="2.0",
-                error=rpc_error,
-            ).model_dump(by_alias=True, mode="json", exclude_none=True))
+        await self.ws.send_json(response_payload(request_id, error=rpc_error))
 
     async def _send_event(self, method: str, params: object) -> None:
-        await self.ws.send_json({
-            "jsonrpc": "2.0",
-            "method": method,
-            "params": params,
-        })
+        await self.ws.send_json(notification_payload(method, params))
 
     async def loop(self):
         await self.ws.accept()

@@ -23,6 +23,7 @@ from rclipboard.helpers import (
     utc_timestamp,
 )
 from rclipboard.log import get_logger as gl
+from rclipboard.models.convert import stub_topic_data
 from rclipboard.types import (
     BidirectionalInterface,
     ClipGetParams,
@@ -38,7 +39,6 @@ from rclipboard.types import (
     StatusResult,
     TopicData,
     TopicsListResult,
-    ValueData,
 )
 
 logger = gl(__name__)
@@ -54,11 +54,7 @@ _clipboard_item_to_topic_data = clipboard_item_to_topic_data
 
 def _stub_if_large(td: TopicData, threshold: int) -> TopicData:
     if len(td.value.value.encode()) >= threshold:
-        return td.model_copy(update={
-            "value": ValueData(value="", type="text", encoding="plain"),
-            "stub": True,
-            "fetch_url": f"/v1/clip/{td.topic}",
-        })
+        return stub_topic_data(td)
     return td
 
 

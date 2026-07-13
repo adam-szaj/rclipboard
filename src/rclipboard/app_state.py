@@ -10,6 +10,7 @@ from typing import Any, Generic, TypeVar, override
 from fastapi import FastAPI
 
 from rclipboard.log import get_logger
+from rclipboard.models.convert import stub_topic_data
 from rclipboard.types import (
     BidirectionalInterface,
     ClientInfo,
@@ -22,7 +23,6 @@ from rclipboard.types import (
     TopicData,
     TopicMeta,
     TopicStatus,
-    ValueData,
 )
 
 logger: Logger = get_logger(__name__)
@@ -421,11 +421,7 @@ class AppState:
                 if (self.lazy_local_threshold > 0
                         and val_len >= self.lazy_local_threshold
                         and getattr(conn, "_is_rpc_transport", False)):
-                    data = data.model_copy(update={
-                        "value": ValueData(value="", type="text", encoding="plain"),
-                        "stub": True,
-                        "fetch_url": f"/v1/clip/{data.topic}",
-                    })
+                    data = stub_topic_data(data)
                 conn.deliver(data)
                 # monitoring counters
                 ci = self.client_info.get(conn)

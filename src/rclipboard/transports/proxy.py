@@ -33,6 +33,7 @@ from rclipboard.helpers import (
     utc_timestamp,
 )
 from rclipboard.log import get_logger
+from rclipboard.models.convert import stub_topic_data
 from rclipboard.transports.rpc_handler import RPCHandler, RPCMethodError
 from rclipboard.types import (
     ClipboardItem,
@@ -42,7 +43,6 @@ from rclipboard.types import (
     RPCError,
     RPCId,
     TopicData,
-    ValueData,
 )
 
 logger: Logger = get_logger(__name__)
@@ -333,11 +333,7 @@ class ProxyClient(RPCHandler):
                     compare_ts = self._normalize_peer_ts(topic_data)
                     val_len = len(topic_data.value.value.encode())
                     if threshold > 0 and val_len >= threshold:
-                        topic_data = topic_data.model_copy(update={
-                            "value": ValueData(value="", type="text", encoding="plain"),
-                            "stub": True,
-                            "fetch_url": f"/v1/clip/{topic_data.topic}",
-                        })
+                        topic_data = stub_topic_data(topic_data)
                     await enqueue_topic_data_nowait(
                         self.app,
                         data=topic_data,
@@ -364,11 +360,7 @@ class ProxyClient(RPCHandler):
             val_len = len(topic_data.value.value.encode())
             if threshold > 0 and val_len >= threshold:
                 # store stub locally — full value fetched on clip.get
-                topic_data = topic_data.model_copy(update={
-                    "value": ValueData(value="", type="text", encoding="plain"),
-                    "stub": True,
-                    "fetch_url": f"/v1/clip/{topic_data.topic}",
-                })
+                topic_data = stub_topic_data(topic_data)
             await enqueue_topic_data_nowait(
                 self.app,
                 data=topic_data,

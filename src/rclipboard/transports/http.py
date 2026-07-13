@@ -105,6 +105,26 @@ def _build_monitor_snapshot(app: FastAPI) -> dict:
     }
 
 
+def _require_admin(request: Request, disabled_detail: str) -> None:
+    """Admin-token gate shared by keys.publish and proxy.connect/disconnect.
+
+    503 when no admin token is configured (message differs per endpoint),
+    403 on a wrong/missing Bearer token.
+    """
+    token = os.environ.get("RCLIPBOARD_ADMIN_TOKEN", "")
+    if not token:
+        raise HTTPException(
+            status_code=503,
+            detail={"code": 5031, "message": disabled_detail},
+        )
+    auth = request.headers.get("authorization", "")
+    if auth != f"Bearer {token}":
+        raise HTTPException(
+            status_code=403,
+            detail={"code": 4031, "message": "Forbidden"},
+        )
+
+
 async def _http_exception_handler(_request: Request,
                                   exc: StarletteHTTPException):
     if isinstance(exc.detail, dict) and {"code", "message"} <= set(exc.detail):
@@ -183,18 +203,7 @@ def install_module(app: FastAPI):
     async def _keys_publish(body: KeyPublishParams,
                             request: Request) -> KeyPublishResult:
         info(f"request from: {request.client}")
-        token = os.environ.get("RCLIPBOARD_ADMIN_TOKEN", "")
-        if not token:
-            raise HTTPException(
-                status_code=503,
-                detail={"code": 5031, "message": "Key registry not enabled"},
-            )
-        auth = request.headers.get("authorization", "")
-        if auth != f"Bearer {token}":
-            raise HTTPException(
-                status_code=403,
-                detail={"code": 4031, "message": "Forbidden"},
-            )
+        _require_admin(request, "Key registry not enabled")
         key_id = hashlib.sha256(body.public_key.encode()).hexdigest()[:16]
         app.state.main.public_keys[body.public_key] = {
             "public_key": body.public_key,
@@ -213,18 +222,7 @@ def install_module(app: FastAPI):
     async def _proxy_connect(body: ProxyConnectParams,
                              request: Request) -> ProxyConnectResult:
         info(f"request from: {request.client}")
-        token = os.environ.get("RCLIPBOARD_ADMIN_TOKEN", "")
-        if not token:
-            raise HTTPException(
-                status_code=503,
-                detail={"code": 5031, "message": "Admin token not configured"},
-            )
-        auth = request.headers.get("authorization", "")
-        if auth != f"Bearer {token}":
-            raise HTTPException(
-                status_code=403,
-                detail={"code": 4031, "message": "Forbidden"},
-            )
+        _require_admin(request, "Admin token not configured")
         from rclipboard.transports.proxy import connect_proxy
         await connect_proxy(app, body.endpoint, reconnect=body.reconnect)
         return ProxyConnectResult(ok=True, endpoint=body.endpoint)
@@ -232,18 +230,7 @@ def install_module(app: FastAPI):
     @app.post("/v1/proxy.disconnect", response_model=ProxyDisconnectResult)
     async def _proxy_disconnect(request: Request) -> ProxyDisconnectResult:
         info(f"request from: {request.client}")
-        token = os.environ.get("RCLIPBOARD_ADMIN_TOKEN", "")
-        if not token:
-            raise HTTPException(
-                status_code=503,
-                detail={"code": 5031, "message": "Admin token not configured"},
-            )
-        auth = request.headers.get("authorization", "")
-        if auth != f"Bearer {token}":
-            raise HTTPException(
-                status_code=403,
-                detail={"code": 4031, "message": "Forbidden"},
-            )
+        _require_admin(request, "Admin token not configured")
         from rclipboard.transports.proxy import disconnect_proxy
         await disconnect_proxy(app)
         return ProxyDisconnectResult(ok=True)
