@@ -7,7 +7,7 @@ from pathlib import Path
 
 import uvicorn
 
-from rclipboard.helpers import bind_endpoint_from_env
+from rclipboard.endpoints import bind_endpoint_from_env
 from rclipboard.main import create_app
 
 

@@ -1,4 +1,5 @@
 """JSON-RPC 2.0 envelope models shared by WS, raw UDS and the proxy client."""
+import itertools
 from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field, JsonValue
@@ -6,6 +7,12 @@ from pydantic import BaseModel, Field, JsonValue
 from rclipboard.models.wire import RPCError
 
 RPCId = int | str | None
+
+_id_counter = itertools.count(1)
+
+
+def next_id() -> int:
+    return next(_id_counter)
 
 
 class Message(BaseModel):

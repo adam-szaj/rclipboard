@@ -1,9 +1,14 @@
 """Data models: wire (Pydantic), JSON-RPC envelopes, and conversions."""
+from rclipboard.models.convert import (
+    clipboard_item_to_topic_data,
+    topic_data_to_clipboard_item,
+)
 from rclipboard.models.rpc import (
     JSONRPCRequestMessage,
     JSONRPCResponseMessage,
     Message,
     RPCId,
+    next_id,
 )
 from rclipboard.models.wire import (
     ClipboardItem,
@@ -32,6 +37,9 @@ from rclipboard.models.wire import (
 )
 
 __all__ = [
+    "clipboard_item_to_topic_data",
+    "next_id",
+    "topic_data_to_clipboard_item",
     "ClipboardItem",
     "ClipGetParams",
     "ClipGetResult",
