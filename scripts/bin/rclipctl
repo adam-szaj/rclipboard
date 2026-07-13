@@ -255,16 +255,19 @@ if [ -z "${RCLIP_CONF:-}" ]; then
 fi
 unset _RUNTIME_ENV
 
+# An explicit --config hard-requires the rclipboard binary; the implicit
+# default config is best-effort (plain transport commands must keep working
+# without a local rclipboard install).
+CONFIG_EXPLICIT="${CONFIG_FILE:+1}"
 CONFIG_FILE="${CONFIG_FILE:-$HOME/.config/rclipboard/config.toml}"
-if [ -n "$CONFIG_FILE" ]; then
-    RCLIPBOARD_BIN="$(find_rclipboard)" || {
-        echo "error: rclipboard not found in PATH; cannot load --config" >&2
-        exit 1
-    }
+if RCLIPBOARD_BIN="$(find_rclipboard)"; then
     # shellcheck disable=SC2046
-    if pidof rclipboard  &> /dev/null ; then
+    if [ -f "$CONFIG_FILE" ] && pidof rclipboard &> /dev/null; then
         $RCLIPBOARD_BIN config env --config "$CONFIG_FILE" > ${RCLIP_CONF}
     fi
+elif [ -n "$CONFIG_EXPLICIT" ]; then
+    echo "error: rclipboard not found in PATH; cannot load --config" >&2
+    exit 1
 fi
 
 if [ -r "$RCLIP_CONF" ]; then

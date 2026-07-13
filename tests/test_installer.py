@@ -27,26 +27,22 @@ ROOT_DIR = Path(__file__).resolve().parent.parent
 # Scripts that must end up in BIN_DIR after installation.
 EXPECTED_SCRIPTS = [
     "rclipctl",
-    "rctrl-c",
-    "rctrl-v",
     "rclip-smoke.sh",
     "rcliptunel",
     "install-systemd-user.sh",
+    "rclipboard-launcher",
+    "rclipboard-setup",
 ]
 
 # Systemd service units that must be installed.
 EXPECTED_UNITS = [
     "rclipboard.service",
-    "rclipboard-proxy.service",
-    "rclipboard@.service",
-    "rclipboard.socket",
+    "rclipboard-display.service",
 ]
 
 # Services that must have a WorkingDirectory override.conf.
 OVERRIDE_SERVICES = [
     "rclipboard.service",
-    "rclipboard-proxy.service",
-    "rclipboard@.service",
 ]
 
 
@@ -162,13 +158,7 @@ class InstallerLayoutTests(unittest.TestCase):
 
     def test_units_exec_start_uses_venv_binary(self) -> None:
         expected = "ExecStart=%h/.config/rclipboard/venv/bin/rclipboard"
-        for name in ["rclipboard.service", "rclipboard-proxy.service"]:
-            with self.subTest(unit=name):
-                self.assertIn(expected, (self.unit_dir / name).read_text())
-
-    def test_fd_service_exec_start_has_fd_flag(self) -> None:
-        text = (self.unit_dir / "rclipboard@.service").read_text()
-        self.assertIn("ExecStart=%h/.config/rclipboard/venv/bin/rclipboard --fd 3", text)
+        self.assertIn(expected, (self.unit_dir / "rclipboard.service").read_text())
 
     def test_main_service_has_exec_start_pre(self) -> None:
         text = (self.unit_dir / "rclipboard.service").read_text()
