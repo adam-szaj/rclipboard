@@ -12,6 +12,7 @@ from rclipboard.core.state import (
     enqueue_request_topics,
     enqueue_topic_data,
     subscribe_client,
+    unregister_client,
     unsubscribe_client,
 )
 import datetime
@@ -132,6 +133,34 @@ class RPCHandler(BidirectionalInterface):
                 data.meta,
             },
         )
+
+    async def _dispatch_message(self, json_message: object) -> None:
+        """Validate and dispatch one decoded JSON-RPC frame.
+
+        Shared receive-path step for the ws/uds server connections: silently
+        skips non-request frames, answers malformed requests with the JSON-RPC
+        "Invalid Request" error, and routes valid ones to handle_request.
+        """
+        if not isinstance(json_message, dict) or "method" not in json_message:
+            return
+        try:
+            request = JSONRPCRequestMessage.model_validate(json_message)
+        except ValidationError as exc:
+            await self._send_error(
+                json_message.get("id"),
+                RPCError(code=1000,
+                         message="Invalid Request",
+                         data=json.loads(exc.json())))
+            return
+        await self.handle_request(request)
+
+    async def _teardown_connection(self) -> None:
+        """Shared connection teardown: unsubscribe, drain, unregister."""
+        if self.topics:
+            unsubscribe_client(self.app, self, list(self.topics))
+            self.topics.clear()
+        await self.stop_drainer()
+        unregister_client(self.app, self)
 
     async def _handle_clip_put(
             self, request: JSONRPCRequestMessage) -> ClipPutResult:

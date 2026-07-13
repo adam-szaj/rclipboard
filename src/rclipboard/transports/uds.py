@@ -8,15 +8,11 @@ from pathlib import Path
 from typing import override
 
 from fastapi import FastAPI
-from pydantic import JsonValue, ValidationError
+from pydantic import JsonValue
 
-from rclipboard.core.state import register_client, unregister_client, unsubscribe_client
+from rclipboard.core.state import register_client
 from rclipboard.log import get_logger as gl
-from rclipboard.models.rpc import (
-    JSONRPCRequestMessage,
-    notification_payload,
-    response_payload,
-)
+from rclipboard.models.rpc import notification_payload, response_payload
 from rclipboard.models.wire import RPCError
 from rclipboard.transports.rpc_handler import RPCHandler
 
@@ -83,26 +79,11 @@ class UDSServerConnection(RPCHandler):
                     json_message = json.loads(line)
                 except json.JSONDecodeError:
                     continue
-                if not isinstance(json_message, dict) or "method" not in json_message:
-                    continue
-                try:
-                    request = JSONRPCRequestMessage.model_validate(json_message)
-                except ValidationError as exc:
-                    await self._send_error(
-                        json_message.get("id"),
-                        RPCError(code=1000,
-                                 message="Invalid Request",
-                                 data=json.loads(exc.json())))
-                    continue
-                await self.handle_request(request)
+                await self._dispatch_message(json_message)
         except (ConnectionResetError, BrokenPipeError, OSError):
             pass
         finally:
-            if self.topics:
-                unsubscribe_client(self.app, self, list(self.topics))
-                self.topics.clear()
-            await self.stop_drainer()
-            unregister_client(self.app, self)
+            await self._teardown_connection()
             with contextlib.suppress(Exception):
                 self.writer.close()
                 await self.writer.wait_closed()
