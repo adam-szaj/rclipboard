@@ -143,6 +143,50 @@ class KeysRegistryTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertTrue(body["item"]["encrypted"])
 
+    # ── GET /v1/clip/{topic} with encrypted content ──────────────────────────
+    def test_get_clip_topic_unencrypted_no_header(self):
+        """Plain content stays freely accessible on the GET endpoint."""
+        post_json(
+            f"{self._base()}/v1/clip.put",
+            {
+                "items": [{"topic": "c", "mime": "text/plain", "encoding": "utf-8", "value": "hello"}],
+                "meta": {},
+            },
+        )
+        status, body = get_json(f"{self._base()}/v1/clip/c")
+        self.assertEqual(status, 200)
+        self.assertEqual(body["value"]["value"], "hello")
+
+    def test_get_clip_topic_encrypted_no_header(self):
+        """GET /v1/clip/{topic} enforces the same gate as POST /v1/clip.get."""
+        self._put_encrypted()
+        status, body = get_json(f"{self._base()}/v1/clip/c")
+        self.assertEqual(status, 403)
+        self.assertEqual(body["code"], 4032)
+
+    def test_get_clip_topic_encrypted_unregistered_key(self):
+        self._put_encrypted()
+        status, body = get_json(
+            f"{self._base()}/v1/clip/c",
+            extra_headers={"X-Age-Public-Key": OTHER_KEY},
+        )
+        self.assertEqual(status, 403)
+        self.assertEqual(body["code"], 4032)
+
+    def test_get_clip_topic_encrypted_registered(self):
+        post_json(
+            f"{self._base()}/v1/keys.publish",
+            {"public_key": FAKE_KEY, "label": "test"},
+            extra_headers={"Authorization": f"Bearer {ADMIN_TOKEN}"},
+        )
+        self._put_encrypted("dGVzdA==")
+        status, body = get_json(
+            f"{self._base()}/v1/clip/c",
+            extra_headers={"X-Age-Public-Key": FAKE_KEY},
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(body["value"]["value"], "dGVzdA==")
+
     # ── clip.watch initial sync with encrypted content ───────────────────────
     def _watch_contents(self, public_key: str | None) -> dict:
         """Open a WS, send clip.watch (optionally with a key), return contents."""
@@ -191,6 +235,33 @@ class KeysRegistryTests(unittest.TestCase):
         contents = self._watch_contents(public_key=FAKE_KEY)
         self.assertIn("c", contents)
         self.assertEqual(contents["c"]["value"]["value"], "dGVzdA==")
+
+    def test_rewatch_encrypted_still_filtered_without_key(self):
+        """The encrypted filter also applies to the re-watch reply (which
+        returns contents for already-watched topics)."""
+        import asyncio
+        import json
+
+        from websockets.asyncio.client import connect
+
+        self._put_encrypted()
+
+        async def _run() -> None:
+            uri = f"ws://127.0.0.1:{self.port}/ws"
+            async with connect(uri) as ws:
+                for mid in (1, 2):
+                    await ws.send(json.dumps({
+                        "jsonrpc": "2.0", "id": mid,
+                        "method": "clip.watch",
+                        "params": {"topics": ["c"]},
+                    }))
+                    reply = json.loads(
+                        await asyncio.wait_for(ws.recv(), timeout=5))
+                    contents = reply["result"].get("contents", {})
+                    self.assertNotIn("c", contents,
+                                     f"watch #{mid} must not leak encrypted")
+
+        asyncio.run(_run())
 
     def test_watch_unencrypted_replicated_without_key(self):
         """Plain values keep flowing in the watch reply regardless of keys."""

@@ -136,6 +136,39 @@ class KeyPropagationTests(unittest.TestCase):
         _wait_for(lambda: OTHER_KEY in _keys_on(self.upstream_port),
                   what="live key forwarded to upstream")
 
+    def test_key_registered_via_rpc_is_forwarded(self):
+        """keys.publish over the RPC transport (WS) must propagate upstream
+        exactly like the HTTP endpoint — a downstream proxy in a chain
+        registers its clients' keys via RPC, not HTTP."""
+        import asyncio
+        import json
+
+        from websockets.asyncio.client import connect
+
+        self._connect_proxy()
+        _wait_for(
+            lambda: get_json(
+                f"http://127.0.0.1:{self.proxy_port}/v1/health.get"
+            )[1].get("proxy_good") is True,  # type: ignore[union-attr]
+            what="proxy connected",
+        )
+
+        async def _publish_via_rpc() -> dict:
+            uri = f"ws://127.0.0.1:{self.proxy_port}/ws"
+            async with connect(uri) as ws:
+                await ws.send(json.dumps({
+                    "jsonrpc": "2.0", "id": 1, "method": "keys.publish",
+                    "params": {"public_key": OTHER_KEY, "label": "rpc",
+                               "token": ADMIN_TOKEN},
+                }))
+                return json.loads(await asyncio.wait_for(ws.recv(), timeout=5))
+
+        reply = asyncio.run(_publish_via_rpc())
+        self.assertTrue(reply["result"]["ok"], reply)
+
+        _wait_for(lambda: OTHER_KEY in _keys_on(self.upstream_port),
+                  what="RPC-registered key forwarded to upstream")
+
     def test_encrypted_update_flows_after_replay(self):
         # key known at the proxy, then connect, then a NEW encrypted value
         # appears upstream — the clip.changed path must now pass the filter.

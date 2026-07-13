@@ -82,8 +82,8 @@ def stop_process(proc: subprocess.Popen) -> None:
         proc.wait(timeout=5)
 
 
-def get_json(url: str) -> tuple[int, object]:
-    req = urllib.request.Request(url, method="GET")
+def get_json(url: str, extra_headers: dict[str, str] | None = None) -> tuple[int, object]:
+    req = urllib.request.Request(url, headers=extra_headers or {}, method="GET")
     try:
         with urllib.request.urlopen(req, timeout=5) as resp:
             return resp.status, json.loads(resp.read().decode())

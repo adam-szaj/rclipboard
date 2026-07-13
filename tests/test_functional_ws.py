@@ -57,6 +57,30 @@ class FunctionalWebSocketTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn('"method":"clip.changed"', compact)
             self.assertIn('"value":"hello-ws"', compact)
 
+    async def test_rewatch_returns_contents_for_already_watched_topics(self):
+        """A repeated clip.watch on the same connection must return the
+        current contents for already-watched topics, not an empty dict."""
+        uri = f"ws://127.0.0.1:{self.port}/ws"
+        async with websockets.connect(uri) as ws:
+            await ws.send(json.dumps({
+                "jsonrpc": "2.0", "id": "put-1", "method": "clip.put",
+                "params": {"items": [{"topic": "c", "mime": "text/plain",
+                                      "encoding": "utf-8", "value": "rewatch-me"}],
+                           "meta": {}},
+            }))
+            await asyncio.wait_for(ws.recv(), timeout=5)
+
+            for watch_id in ("watch-1", "watch-2"):
+                await ws.send(json.dumps({
+                    "jsonrpc": "2.0", "id": watch_id, "method": "clip.watch",
+                    "params": {"topics": ["c"]},
+                }))
+                reply = json.loads(await asyncio.wait_for(ws.recv(), timeout=5))
+                contents = reply["result"].get("contents", {})
+                self.assertIn("c", contents,
+                              f"{watch_id}: watch reply must carry current contents")
+                self.assertEqual(contents["c"]["value"]["value"], "rewatch-me")
+
     async def test_invalid_params_return_jsonrpc_error(self):
         uri = f"ws://127.0.0.1:{self.port}/ws"
         async with websockets.connect(uri) as ws:

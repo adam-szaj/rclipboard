@@ -3,6 +3,7 @@ from __future__ import annotations
 import contextlib
 import datetime
 import hashlib
+import hmac
 import os
 import time
 
@@ -118,7 +119,7 @@ def _require_admin(request: Request, disabled_detail: str) -> None:
             detail={"code": 5031, "message": disabled_detail},
         )
     auth = request.headers.get("authorization", "")
-    if auth != f"Bearer {token}":
+    if not hmac.compare_digest(auth.encode(), f"Bearer {token}".encode()):
         raise HTTPException(
             status_code=403,
             detail={"code": 4031, "message": "Forbidden"},
@@ -169,6 +170,13 @@ def install_module(app: FastAPI):
         content: TopicData | None = await enqueue_request_topic(app, topic)
         if content is None:
             raise HTTPException(status_code=404)
+        if content.meta.get("encrypted") is True:
+            pub_key = request.headers.get("x-age-public-key", "")
+            if not pub_key or pub_key not in app.state.main.public_keys:
+                raise HTTPException(
+                    status_code=403,
+                    detail={"code": 4032, "message": "Not registered"},
+                )
         return content
 
     @app.post("/v1/clip.get", response_model=ClipGetResult)

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import contextlib
 import hashlib
+import hmac
 import json
 import os
 from abc import abstractmethod
@@ -217,7 +219,8 @@ class RPCHandler(BidirectionalInterface):
         admin_token = os.environ.get("RCLIPBOARD_ADMIN_TOKEN", "")
         if not admin_token:
             raise RPCMethodError(5031, "Key registry not enabled")
-        if params.token != admin_token:
+        if not hmac.compare_digest(params.token.encode(),
+                                   admin_token.encode()):
             raise RPCMethodError(4031, "Forbidden")
         key_id = hashlib.sha256(params.public_key.encode()).hexdigest()[:16]
         self.app.state.main.public_keys[params.public_key] = {
@@ -226,6 +229,15 @@ class RPCHandler(BidirectionalInterface):
             "key_id": key_id,
         }
         self.presented_keys.add(params.public_key)
+        # Live propagation, same as POST /v1/keys.publish: when this server
+        # is a proxy with an active upstream link, forward the registration
+        # so the next hop in a proxy chain learns the key too.
+        proxy_client = getattr(self.app.state, "proxy_client", None)
+        if proxy_client is not None and proxy_client is not self \
+                and getattr(proxy_client, "connected", False):
+            with contextlib.suppress(Exception):
+                await proxy_client.publish_key_upstream(params.public_key,
+                                                        params.label)
         return KeyPublishResult(ok=True, key_id=key_id)
 
     async def _handle_clip_watch(
@@ -242,10 +254,20 @@ class RPCHandler(BidirectionalInterface):
         new_topics = [
             topic for topic in params.topics if topic not in self.topics
         ]
+        rewatched = [
+            topic for topic in params.topics if topic in self.topics
+        ]
         contents: dict = {}
         if new_topics:
             contents = subscribe_client(self.app, self, new_topics)
             self.topics.update(new_topics)
+        # A re-watch (reconnect/refresh) must also see the current value of
+        # topics this connection already watches, not an empty contents dict.
+        for topic in rewatched:
+            content = await enqueue_request_topic(self.app, topic,
+                                                  requester=self)
+            if content is not None:
+                contents[topic] = content
         # Policy: encrypted values are never pushed to peers without a
         # registered public key. The clip.changed dispatch already filters
         # (see AppState._dispatch_data_item); the initial-sync contents must
