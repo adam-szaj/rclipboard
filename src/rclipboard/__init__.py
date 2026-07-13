@@ -8,6 +8,7 @@ from pathlib import Path
 import uvicorn
 
 from rclipboard.endpoints import bind_endpoint_from_env
+from rclipboard.envutil import env_bool
 from rclipboard.main import create_app
 
 
@@ -102,7 +103,7 @@ def main() -> None:
         ssl_keyfile=ssl_keyfile,
         ssl_keyfile_password=ssl_keyfile_password,
         log_level=os.environ.get("RCLIPBOARD_LOG_LEVEL", "info"),
-        reload=os.environ.get("RCLIPBOARD_RELOAD", "0") in {"1", "true", "True"},
+        reload=env_bool("RCLIPBOARD_RELOAD"),
         timeout_graceful_shutdown=graceful_timeout,
     )
 

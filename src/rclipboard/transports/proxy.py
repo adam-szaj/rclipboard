@@ -25,6 +25,7 @@ from rclipboard.core.state import (
     unsubscribe_client,
 )
 from rclipboard.endpoints import upstream_endpoint_from_env
+from rclipboard.envutil import env_bool
 from rclipboard.log import get_logger
 from rclipboard.models.convert import (
     clipboard_item_to_topic_data,
@@ -517,7 +518,7 @@ def _make_ws_url() -> dict[str, str | bool | Path]:
 
 
 def install_proxy(app: FastAPI) -> None:
-    enabled = os.environ.get("RCLIPBOARD_PROXY", "0") in ("1", "true", "True")
+    enabled = env_bool("RCLIPBOARD_PROXY")
     app.state.proxy_enabled = enabled
     app.state.proxy_connected = False
     app.state.proxy_task = None

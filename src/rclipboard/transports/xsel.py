@@ -16,6 +16,7 @@ from rclipboard.core.state import (
     subscribe_client,
 )
 from rclipboard.core.interfaces import BidirectionalInterface
+from rclipboard.envutil import env_bool
 from rclipboard.log import get_logger
 from rclipboard.models.wire import TopicData, ValueData
 from rclipboard.timeutil import utc_timestamp
@@ -28,16 +29,8 @@ debug = logger.debug
 trace = logger.debug
 
 XSEL_PATH: Path = Path(os.environ.get("RCLIPBOARD_XSEL_PATH", "/usr/bin/xsel"))
-XSEL_ENABLED: bool = os.environ.get("RCLIPBOARD_XSEL", "0") not in (
-    "0",
-    "false",
-    "False",
-)
-XSEL_ENCRYPT: bool = os.environ.get("RCLIPBOARD_XSEL_ENCRYPT", "0") not in (
-    "0",
-    "false",
-    "False",
-)
+XSEL_ENABLED: bool = env_bool("RCLIPBOARD_XSEL")
+XSEL_ENCRYPT: bool = env_bool("RCLIPBOARD_XSEL_ENCRYPT")
 RCLIPCTL_PATH: Path = Path(os.environ.get("RCLIPCTL_PATH", "rclipctl"))
 
 POLL_INTERVAL_MS: int = int(
