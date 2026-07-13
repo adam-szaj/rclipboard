@@ -1,16 +1,4 @@
-"""Compatibility shim — contents moved to rclipboard.models and rclipboard.core.
-
-Kept during the module-structure refactor so existing imports keep working;
-scheduled for removal once all importers point at the new locations.
-"""
-from rclipboard.core.interfaces import BidirectionalInterface, Interface
-from rclipboard.core.monitoring import (
-    ClientInfo,
-    MonitorEvent,
-    MonitorEventKind,
-    TopicMeta,
-)
-from rclipboard.core.topics import InternalTopicData
+"""Data models: wire (Pydantic), JSON-RPC envelopes, and conversions."""
 from rclipboard.models.rpc import (
     JSONRPCRequestMessage,
     JSONRPCResponseMessage,
@@ -18,7 +6,6 @@ from rclipboard.models.rpc import (
     RPCId,
 )
 from rclipboard.models.wire import (
-    _TOPIC_RE,
     ClipboardItem,
     ClipGetParams,
     ClipGetResult,
@@ -45,9 +32,6 @@ from rclipboard.models.wire import (
 )
 
 __all__ = [
-    "_TOPIC_RE",
-    "BidirectionalInterface",
-    "ClientInfo",
     "ClipboardItem",
     "ClipGetParams",
     "ClipGetResult",
@@ -57,8 +41,6 @@ __all__ = [
     "ClipWatchResult",
     "DigestInfo",
     "HealthResult",
-    "Interface",
-    "InternalTopicData",
     "JSONRPCRequestMessage",
     "JSONRPCResponseMessage",
     "KeyEntry",
@@ -66,8 +48,6 @@ __all__ = [
     "KeyPublishResult",
     "KeysListResult",
     "Message",
-    "MonitorEvent",
-    "MonitorEventKind",
     "ProxyConnectParams",
     "ProxyConnectResult",
     "ProxyDisconnectResult",
@@ -75,7 +55,6 @@ __all__ = [
     "RPCId",
     "StatusResult",
     "TopicData",
-    "TopicMeta",
     "TopicsListParams",
     "TopicsListResult",
     "TopicStatus",
