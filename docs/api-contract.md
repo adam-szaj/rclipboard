@@ -108,6 +108,7 @@ full value from `fetch_url` (`GET /v1/clip/{topic}`) on demand.
 | `topics.list`  | `POST /v1/topics.list`     | client → server|
 | `health.get`   | `GET /v1/health.get`       | client → server|
 | `status.get`   | `GET /v1/status.get`       | client → server|
+| `keys.publish` | `POST /v1/keys.publish` or WS / UDS | client → server|
 
 ---
 
@@ -248,8 +249,12 @@ Params:
 { "topics": ["c", "p"], "public_key": "age1..." }
 ```
 
-`public_key` is optional; when provided, the connection will receive
-`clip.changed` for encrypted topics whose key matches the registry.
+`public_key` is optional; when provided, the key is *presented* on this
+connection and the connection will receive `clip.changed` for encrypted
+topics whose key matches the registry. A connection may present multiple
+keys over its lifetime (each `clip.watch` `public_key` and each
+`keys.publish` sent over the connection adds one) — encrypted-content
+gates pass when **any** presented key is registered.
 
 Result:
 ```json
@@ -264,6 +269,12 @@ Result:
 `contents` carries current values for topics that already have data.
 Items may have `stub: true` when `RCLIPBOARD_LAZY_LOCAL_KB` is set and the
 payload exceeds the threshold.
+
+**Encrypted topics are filtered out of `contents`** unless the connection
+has presented a registered key — same policy as the `clip.changed`
+dispatch: encrypted values are never pushed to peers without a registered
+key. The subscription itself is still created, so the topic starts
+flowing once the peer's key is registered.
 
 ### `clip.unwatch`
 
@@ -323,11 +334,49 @@ Result:
 
 ### `keys.publish`
 
-HTTP only. Requires `Authorization: Bearer <RCLIPBOARD_ADMIN_TOKEN>`.
+Available on HTTP and on the RPC transports (WS / raw UDS).
+
+**HTTP**: requires `Authorization: Bearer <RCLIPBOARD_ADMIN_TOKEN>`.
 Returns `503 5031` when `RCLIPBOARD_ADMIN_TOKEN` is not configured.
 
 Body: `{ "public_key": "age1...", "label": "laptop" }`
 Result: `{ "ok": true, "key_id": "a1b2c3d4e5f6a7b8" }`
+
+**RPC (WS / UDS)**: there is no Authorization header, so the admin token
+travels in the params:
+
+```json
+{ "jsonrpc": "2.0", "id": 7, "method": "keys.publish",
+  "params": { "public_key": "age1...", "label": "laptop",
+              "token": "<RCLIPBOARD_ADMIN_TOKEN>" } }
+```
+
+Errors: `5031` ("Key registry not enabled") when the server has no admin
+token configured, `4031` ("Forbidden") on a wrong token.
+
+Registering over an RPC connection additionally marks the key as
+*presented* on that connection (see `clip.watch`), so encrypted content
+starts flowing to the peer immediately.
+
+#### Key propagation (proxy → upstream)
+
+A proxy registers keys on behalf of its downstream clients so the
+upstream's encrypted-content policy ("never push encrypted values to
+peers without a registered key") does not starve them:
+
+- **Replay on connect** — right after the upstream connection is
+  established, and *before* `clip.watch`, the proxy sends `keys.publish`
+  for every key in its local registry. This covers clients that
+  registered before the upstream link existed and makes the watch
+  initial-sync include encrypted topics.
+- **Live forward** — a `POST /v1/keys.publish` handled by a connected
+  proxy is forwarded upstream immediately (best effort; the local
+  registration succeeds regardless of upstream availability).
+
+The token used upstream is `RCLIPBOARD_UPSTREAM_ADMIN_TOKEN`, falling
+back to `RCLIPBOARD_ADMIN_TOKEN`. Without it the proxy logs a warning
+and skips propagation (plain topics keep working; encrypted ones stay
+local).
 
 ### `keys.list`
 

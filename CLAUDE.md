@@ -44,17 +44,17 @@ make proxy-smoke
 
 | Transport | Entry point | Notes |
 |-----------|-------------|-------|
-| HTTP REST | `http.py` | `POST /v1/clip.*`, `GET /v1/health.get`, etc. |
-| WebSocket  | `ws.py` | JSON-RPC 2.0 at `/ws` |
-| Raw UDS | `uds.py` | JSON-RPC 2.0 over NDJSON, low-overhead alternative to HTTP/WS |
-| X11 clipboard | `xsel.py` | polls `xsel` binary, enabled via `RCLIPBOARD_XSEL=1` |
-| Proxy (upstream client) | `proxy.py` | opens a WS to an upstream server and replicates topics locally |
+| HTTP REST | `transports/http.py` | `POST /v1/clip.*`, `GET /v1/health.get`, etc. |
+| WebSocket  | `transports/ws.py` | JSON-RPC 2.0 at `/ws` |
+| Raw UDS | `transports/uds.py` | JSON-RPC 2.0 over NDJSON, low-overhead alternative to HTTP/WS |
+| X11 clipboard | `transports/xsel.py` | polls `xsel` binary, enabled via `RCLIPBOARD_XSEL=1` |
+| Proxy (upstream client) | `transports/proxy.py` | opens a WS to an upstream server and replicates topics locally |
 
-All transports share the same Pydantic models from `types.py` (`ClipboardItem`, `TopicData`, JSON-RPC envelopes). HTTP strips the JSON-RPC wrapper (endpoint = method, body = params/result/error); WS and raw UDS use the full JSON-RPC 2.0 envelope with identical message format.
+All transports share the same Pydantic models from `models/wire.py` and `models/rpc.py` (`ClipboardItem`, `TopicData`, JSON-RPC envelopes). HTTP strips the JSON-RPC wrapper (endpoint = method, body = params/result/error); WS and raw UDS use the full JSON-RPC 2.0 envelope with identical message format.
 
 ### State & concurrency
 
-`AppState` (`app_state.py`) contains:
+`AppState` (`core/state.py`) contains:
 - `topic_content: dict[str, TopicData]` — stored topics
 - `subs: dict[str, set[Interface]]` — per-topic subscriber sets
 - `Bus` — an `asyncio.Queue` of `SerialCall` items (discriminated union of `GetTopicData` / `SetTopicData`)
@@ -80,13 +80,15 @@ All transports (WS connections, proxy, xsel) extend `BidirectionalInterface` and
 
 ### Proxy mode
 
-When `RCLIPBOARD_PROXY=1`, `proxy.py` instantiates a `ProxyClient` (extends `BidirectionalInterface`) that:
+When `RCLIPBOARD_PROXY=1`, `transports/proxy.py` instantiates a `ProxyClient` (extends `RPCHandler`) that:
 - opens a WebSocket to the upstream server
+- **replays its local key registry upstream** (`keys.publish` RPC for every locally registered key, authenticated with `RCLIPBOARD_UPSTREAM_ADMIN_TOKEN`, fallback `RCLIPBOARD_ADMIN_TOKEN`) — *before* `clip.watch`, so the initial sync already passes the upstream's encrypted-content gate (see "Encrypted-content policy" below)
 - calls `clip.watch` on default topics (`["c", "p", "s"]`) to subscribe
 - forwards local `clip.put` upstream via `send()`, stamping `meta["via"]="proxy"` and `meta["host"]=<hostname>` so the upstream can tell the put arrived through a proxy and from which host (original client `meta` is preserved)
-- ingests `clip.changed` from upstream and stores it locally via `app_state.enqueue_topic_data()`
+- ingests `clip.changed` from upstream and stores it locally via `enqueue_topic_data()`
+- forwards live key registrations: a `POST /v1/keys.publish` handled while the upstream link is up is propagated immediately (best effort — local registration succeeds regardless)
 
-The local HTTP/WS server then serves local clients, reducing SSH round-trips. The proxy is a regular subscriber registered in `app_state`, so it receives all local topic updates through its drainer (decoupled from dispatcher). Upstream sends are non-blocking and buffered per-topic.
+The local HTTP/WS server then serves local clients, reducing SSH round-trips. The proxy is a regular subscriber registered in `AppState`, so it receives all local topic updates through its drainer (decoupled from dispatcher). Upstream sends are non-blocking and buffered per-topic.
 
 ### Conflict resolution (time-based sync)
 
@@ -121,7 +123,8 @@ Both the main server and a proxy may already hold buffered topics in memory when
 | `RCLIPBOARD_SSL_CERTFILE/KEYFILE` | Paths to TLS cert/key for HTTPS |
 | `RCLIPBOARD_SSL_KEYFILE_PASSWORD` | Password for encrypted private key |
 | `RCLIPBOARD_RELOAD` | `1` to enable uvicorn reload mode (dev only) |
-| `RCLIPBOARD_ADMIN_TOKEN` | Bearer token required for `POST /v1/keys.publish` (empty = registry disabled) |
+| `RCLIPBOARD_ADMIN_TOKEN` | Bearer token required for `keys.publish` (HTTP header or RPC `token` param; empty = registry disabled) |
+| `RCLIPBOARD_UPSTREAM_ADMIN_TOKEN` | Token the proxy uses to propagate key registrations upstream (falls back to `RCLIPBOARD_ADMIN_TOKEN`) |
 | `RCLIPBOARD_AGE_KEY_FILE` | Path to age private key file (default: `~/.config/rclipboard/age_key.txt`) |
 | `RCLIPBOARD_KNOWN_KEYS_FILE` | Path to file with recipient public keys (default: `~/.config/rclipboard/known_keys`) |
 
@@ -254,13 +257,22 @@ Encryption flags on `put`: `--encrypt` / `-E`, `--key <age1...>`, `--key-file <p
 
 | Module | Responsibility |
 |--------|-----------------|
-| `app_state.py` | Central topic storage, subscriber management, dispatch queue, debounce logic, background task tracking, in-memory public key registry |
-| `types.py` | Pydantic models, `Interface`/`BidirectionalInterface` base classes with drainer infrastructure |
-| `http.py` | HTTP REST endpoints; `POST /v1/keys.publish` (token auth), `GET /v1/keys.list`, `clip.get` encrypted gate |
-| `ws.py` | WebSocket server, JSON-RPC 2.0 handling, per-connection drainer |
-| `uds.py` | Raw Unix Domain Socket server, JSON-RPC 2.0 over NDJSON, per-connection drainer |
-| `xsel.py` | X11 clipboard poller; optional encrypt mode via `rclipctl exec` wrapper |
-| `proxy.py` | Upstream WebSocket client, watch subscription, local topic replication |
+| `core/state.py` | `AppState`: central topic storage, subscriber management, dispatch queue, debounce logic, background task tracking, in-memory public key registry, `app.state.main` facade functions (`enqueue_*`, `*_client`) |
+| `core/bus.py` | `Bus` + `SerialCall` command objects drained sequentially by the dispatcher |
+| `core/interfaces.py` | `Interface`/`BidirectionalInterface` base classes with drainer infrastructure, `monitor_kind`/`monitor_addr` classification hooks |
+| `core/topics.py` | `InternalTopicData` (stored-item wrapper, conflict-resolution `compare_ts`, duck-typed `is_remote`) |
+| `core/monitoring.py` | Telemetry dataclasses + `MonitorHub` (client/topic counters, monitor-event queues, lifecycle/accounting hooks called by `AppState`) |
+| `models/wire.py` | Pydantic wire models (`ValueData`, `TopicData`, `ClipboardItem`, RPC params/results) |
+| `models/rpc.py` | JSON-RPC 2.0 envelope models, `next_id`, shared `response_payload`/`notification_payload` builders |
+| `models/convert.py` | `ClipboardItem` ↔ `TopicData` conversions, `stub_topic_data` |
+| `endpoints.py` | Endpoint parsing (`parse_endpoint`) and env-based bind/upstream resolution |
+| `timeutil.py` | UTC timestamp helpers (`utc_timestamp`, `parse_utc_timestamp`) |
+| `transports/rpc_handler.py` | Shared JSON-RPC method dispatch for WS/UDS/proxy, presented-keys gating, `keys.publish` RPC, peer clock offset |
+| `transports/http.py` | HTTP REST endpoints; `POST /v1/keys.publish` (token auth + upstream forward), `GET /v1/keys.list`, `clip.get` encrypted gate, monitor snapshot/stream |
+| `transports/ws.py` | WebSocket server connection (framing only — dispatch/teardown shared in `rpc_handler`) |
+| `transports/uds.py` | Raw Unix Domain Socket server, JSON-RPC 2.0 over NDJSON (framing only) |
+| `transports/xsel.py` | X11 clipboard poller; optional encrypt mode via `rclipctl exec` wrapper; self-gates on `RCLIPBOARD_XSEL` |
+| `transports/proxy.py` | Upstream WebSocket client, key-registry replay + live forward, watch subscription, local topic replication |
 | `config.py` | Loads `config.toml`, maps TOML fields to env vars, supports `${VAR}` expansion |
 
 ### Task lifecycle and drainer pattern details
@@ -305,8 +317,16 @@ The server is a **blind store** — it never encrypts or decrypts data. All encr
 
 **Public key registry** (`AppState.public_keys`):
 - `POST /v1/keys.publish` — register a public key; requires `Authorization: Bearer <RCLIPBOARD_ADMIN_TOKEN>`; returns 503 if token not configured
+- `keys.publish` over WS/raw UDS — same registration via JSON-RPC; the admin token travels in params (`{"public_key", "label", "token"}`); registering over a connection also marks the key as *presented* on it
 - `GET /v1/keys.list` — open; returns all registered keys
 - Registry is in-memory only (lost on restart)
+
+**Encrypted-content policy** — encrypted values are never *pushed* to peers without a registered key:
+- `clip.changed` dispatch (`AppState._dispatch_data_item`) skips connections whose presented keys (`RPCHandler.presented_keys` — populated from `clip.watch`'s `public_key` and from `keys.publish` over the connection) contain no registered key
+- the `clip.watch` reply filters encrypted topics out of `contents` under the same gate (the subscription itself is created, so the topic starts flowing once a key is registered)
+- `clip.get` (HTTP: `X-Age-Public-Key` header; WS/UDS: any presented key) returns 403/4032 without a registered key
+
+**Key propagation (proxy → upstream)** — so proxy clients aren't starved by the policy: keys registered at the proxy *before* the upstream link exists are replayed on connect (before `clip.watch`); keys registered *while* connected are forwarded live. Both use the `keys.publish` RPC with `RCLIPBOARD_UPSTREAM_ADMIN_TOKEN` (fallback `RCLIPBOARD_ADMIN_TOKEN`); without a token the proxy logs a warning and skips propagation (encrypted topics then stay local).
 
 **`rclipctl` encryption workflow:**
 ```bash
@@ -347,7 +367,7 @@ logging in at the console never leaks their `DISPLAY` into this server. The main
 
 See `docs/api-contract.md` for the full JSON-RPC 2.0 method specs (`clip.put`, `clip.get`, `clip.watch`, `clip.unwatch`, `topics.list`, `health.get`, `status.get`) and the `ClipboardItem` schema. All methods are available on HTTP, WebSocket, and raw UDS transports (with HTTP using REST conventions).
 
-Additional HTTP-only endpoints: `POST /v1/keys.publish`, `GET /v1/keys.list`.
+`keys.publish` is available on HTTP (`POST /v1/keys.publish`, Bearer header) and on WS/raw UDS (JSON-RPC, admin token in params; registering also *presents* the key on the connection). `GET /v1/keys.list` is HTTP-only.
 
 **Server-sent notifications** (no `id`, fire-and-forget, delivered on WS / raw UDS / proxy-upstream connections):
 - `clip.changed` — a watched topic changed (`params`: `{items, meta}`).
