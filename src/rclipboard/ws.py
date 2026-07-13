@@ -8,8 +8,8 @@ from pydantic import JsonValue, ValidationError
 
 from .app_state import register_client, unregister_client, unsubscribe_client
 from .log import get_logger as gl
-from .rpc_handler import RPCHandler, RPCMethodError
-from .types import JSONRPCRequestMessage, JSONRPCResponseMessage, RPCError, TopicData
+from .rpc_handler import RPCHandler
+from .types import JSONRPCRequestMessage, JSONRPCResponseMessage, RPCError
 
 logger = gl(__name__)
 error = logger.error

@@ -2,12 +2,10 @@ import asyncio
 import contextlib
 import datetime
 import os
+import time as _time
 from abc import ABC, abstractmethod
 from logging import Logger
-from typing import TYPE_CHECKING, Any, Generic, TypeVar, override
-
-if TYPE_CHECKING:
-    from rclipboard.types import HealthResult, StatusResult
+from typing import Any, Generic, TypeVar, override
 
 from fastapi import FastAPI
 
@@ -15,12 +13,16 @@ from rclipboard.log import get_logger
 from rclipboard.types import (
     BidirectionalInterface,
     ClientInfo,
+    HealthResult,
     Interface,
     InternalTopicData,
     MonitorEvent,
     MonitorEventKind,
+    StatusResult,
     TopicData,
     TopicMeta,
+    TopicStatus,
+    ValueData,
 )
 
 logger: Logger = get_logger(__name__)
@@ -171,7 +173,6 @@ class AppState:
 
     @staticmethod
     def _utcnow() -> str:
-        import datetime
         return datetime.datetime.now(datetime.timezone.utc).isoformat()
 
     async def broadcast_shutdown(self, reason: str = "server shutting down") -> None:
@@ -254,7 +255,6 @@ class AppState:
         self._emit_runtime_state_change("subscriptions")
 
     def register_client(self, client: Interface):
-        import time as _time
         self.clients.append(client)
         if isinstance(client, BidirectionalInterface):
             client.start_drainer()
@@ -270,7 +270,6 @@ class AppState:
         self._emit_runtime_state_change("clients")
 
     def unregister_client(self, client: Interface):
-        import time as _time
         self.clients.remove(client)
         ci = self.client_info.pop(client, None)
         # remove from notified_clients in all topic_meta
@@ -286,10 +285,9 @@ class AppState:
         ))
         self._emit_runtime_state_change("clients")
 
-    def get_health(self) -> 'HealthResult':
+    def get_health(self) -> HealthResult:
         from rclipboard.proxy import get_proxy_status
         from rclipboard.xsel import get_xsel_status
-        from rclipboard.types import HealthResult
         xsel = get_xsel_status(self.app)
         proxy = get_proxy_status(self.app)
         return HealthResult(
@@ -300,11 +298,9 @@ class AppState:
             proxy_good=bool(proxy["good"]),
         )
 
-    def get_status(self, topics: list[str]) -> 'StatusResult':
-        import time as _time
+    def get_status(self, topics: list[str]) -> StatusResult:
         from rclipboard.proxy import get_proxy_status
         from rclipboard.xsel import get_xsel_status
-        from rclipboard.types import Interface, StatusResult, TopicStatus
         clients = [c.name for c in self.clients if isinstance(c, Interface)]
         now = _time.monotonic()
         topic_status = []
@@ -405,7 +401,6 @@ class AppState:
         self.topic_content[topic_data.topic] = topic_data
 
     def _dispatch_data_item(self, topic_data: InternalTopicData) -> None:
-        import time as _time
         subs: set[Interface] | None = self.subs.get(topic_data.topic)
         if not subs:
             return
@@ -426,7 +421,6 @@ class AppState:
                 if (self.lazy_local_threshold > 0
                         and val_len >= self.lazy_local_threshold
                         and getattr(conn, "_is_rpc_transport", False)):
-                    from rclipboard.types import ValueData
                     data = data.model_copy(update={
                         "value": ValueData(value="", type="text", encoding="plain"),
                         "stub": True,
@@ -511,7 +505,6 @@ class AppState:
             await self._notify_topic_data(topic_data)
 
     async def process_put_item(self, topic_data: InternalTopicData):
-        import time as _time
         await self._process_data_item(topic_data)
         if topic_data.rejected:
             # Conflict resolution dropped this item (older / lost a tie): it was
@@ -552,7 +545,6 @@ class AppState:
 
     async def process_get_item(self, subject: str, topic: str,
                                requester: "Interface | None" = None) -> ItemType:
-        import time as _time
         debug(f"process_get_item subject='{subject}' topic='{topic}'")
         content = None
         if subject == "topic":
@@ -679,7 +671,6 @@ async def enqueue_request_topics(app: FastAPI) -> list[str] | None:
 
 
 def _make_client_info(client: Interface) -> ClientInfo:
-    import time as _time
     from rclipboard.proxy import ProxyClient
     from rclipboard.xsel import XselInterface
     if isinstance(client, ProxyClient):

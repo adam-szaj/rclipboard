@@ -596,6 +596,3 @@ def get_proxy_status(app: FastAPI) -> dict[str, JsonValue]:
         "pending_puts": pending_puts,
         "last_error": conn.last_error,
     }
-
-
-_clipboard_item_to_topic_data = clipboard_item_to_topic_data
