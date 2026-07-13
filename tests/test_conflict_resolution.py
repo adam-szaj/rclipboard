@@ -195,7 +195,7 @@ class ProxyNormalizeTsTests(unittest.TestCase):
     def _client(self, offset_seconds: float | None):
         from rclipboard.transports.proxy import ProxyClient
         c = ProxyClient.__new__(ProxyClient)  # skip __init__ (no event loop)
-        c._clock_offset = (
+        c._peer_clock_offset = (
             None if offset_seconds is None
             else datetime.timedelta(seconds=offset_seconds))
         return c

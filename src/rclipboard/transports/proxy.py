@@ -96,10 +96,11 @@ class ProxyClient(RPCHandler):
         self.rx_count: int = 0                     # total clip.changed received
         self.tx_count: int = 0                     # total clip.put sent upstream
         self.reconnect: bool = True                # whether to auto-reconnect on disconnect
-        # Conflict-resolution clock sync: how far the upstream clock leads ours
-        # (server_now - our_now), exchanged during the clip.watch handshake.
-        # None until the first successful watch on a connection.
-        self._clock_offset: datetime.timedelta | None = None
+        # Conflict-resolution clock sync: how far the upstream clock leads
+        # ours (server_now - our_now), exchanged during the clip.watch
+        # handshake. Stored in the inherited RPCHandler._peer_clock_offset
+        # (None until the first successful watch on a connection), so the
+        # inherited _normalize_peer_ts applies it.
         self._watch_sent_at_utc: datetime.datetime | None = None
         # Hostname stamped onto forwarded puts (constant for this process).
         self._hostname: str = socket.gethostname()
@@ -148,25 +149,9 @@ class ProxyClient(RPCHandler):
             our_mid = recv or sent
         if our_mid is None:
             return
-        self._clock_offset = server_now - our_mid
+        self._peer_clock_offset = server_now - our_mid
         info("proxy: upstream clock offset = %.3fs (server leads)",
-             self._clock_offset.total_seconds())
-
-    def _normalize_peer_ts(self, td: TopicData) -> datetime.datetime | None:
-        """Translate an upstream item's meta['ts'] into our local clock.
-
-        Returns the normalised aware datetime for conflict resolution, or None
-        when the item has no comparable timestamp. With ``offset = server_now -
-        our_now``, a timestamp produced on the upstream clock maps to our clock
-        as ``ts - offset``. When no offset is known yet (no handshake), the raw
-        ts is used as-is.
-        """
-        peer_ts = parse_utc_timestamp(td.meta.get("ts"))
-        if peer_ts is None:
-            return None
-        if self._clock_offset is None:
-            return peer_ts
-        return peer_ts - self._clock_offset
+             self._peer_clock_offset.total_seconds())
 
     @property
     def _lazy_upstream_threshold(self) -> int:
