@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from rclipboard.helpers import parse_endpoint
+from rclipboard.endpoints import parse_endpoint
 
 
 class EndpointConfigTests(unittest.TestCase):

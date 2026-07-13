@@ -10,11 +10,12 @@ from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconn
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from rclipboard.helpers import (
+from rclipboard.core.monitoring import MonitorEventKind
+from rclipboard.models.convert import (
     clipboard_item_to_topic_data,
     topic_data_to_clipboard_item,
 )
-from rclipboard.types import (
+from rclipboard.models.wire import (
     ClipboardItem,
     ClipGetParams,
     ClipGetResult,
@@ -25,7 +26,6 @@ from rclipboard.types import (
     KeyPublishParams,
     KeyPublishResult,
     KeysListResult,
-    MonitorEventKind,
     ProxyConnectParams,
     ProxyConnectResult,
     ProxyDisconnectResult,

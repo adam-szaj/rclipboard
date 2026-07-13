@@ -11,8 +11,9 @@ import datetime
 import unittest
 from unittest import mock
 
-from rclipboard.helpers import parse_utc_timestamp
-from rclipboard.types import InternalTopicData, TopicData, ValueData
+from rclipboard.timeutil import parse_utc_timestamp
+from rclipboard.core.topics import InternalTopicData
+from rclipboard.models.wire import TopicData, ValueData
 
 
 UTC = datetime.timezone.utc
@@ -89,7 +90,7 @@ class IsRemoteTests(unittest.TestCase):
 class AcceptIncomingTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         # AppState.__init__ creates a dispatcher task → needs a running loop.
-        from rclipboard.app_state import AppState
+        from rclipboard.core.state import AppState
         app = mock.MagicMock()
         self.state = AppState(app)
 

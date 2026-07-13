@@ -103,7 +103,7 @@ class HandleEventThroughputTest(unittest.IsolatedAsyncioTestCase):
             "RCLIPBOARD_CONFIG": "/dev/null",
         })
         from fastapi import FastAPI
-        from rclipboard.app_state import AppState
+        from rclipboard.core.state import AppState
         from rclipboard.transports.proxy import ProxyClient
 
         self.app = FastAPI()
@@ -270,8 +270,8 @@ class HandleEventThroughputTest(unittest.IsolatedAsyncioTestCase):
         the queue after each await.  This test uses enqueue_topic_data directly
         to prove the invariant that the fix must break (queue no longer empty).
         """
-        from rclipboard.app_state import enqueue_topic_data
-        from rclipboard.types import TopicData, ValueData
+        from rclipboard.core.state import enqueue_topic_data
+        from rclipboard.models.wire import TopicData, ValueData
 
         N = 20
         for i in range(N):
