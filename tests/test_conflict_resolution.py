@@ -224,7 +224,7 @@ class HandlerPeerClockTests(unittest.TestCase):
     """RPCHandler records the connecting peer's clock and normalises its ts."""
 
     def _handler(self):
-        from rclipboard.rpc_handler import RPCHandler
+        from rclipboard.transports.rpc_handler import RPCHandler
 
         class _ConcreteHandler(RPCHandler):
             @property

@@ -33,7 +33,7 @@ from rclipboard.helpers import (
     utc_timestamp,
 )
 from rclipboard.log import get_logger
-from rclipboard.rpc_handler import RPCHandler, RPCMethodError
+from rclipboard.transports.rpc_handler import RPCHandler, RPCMethodError
 from rclipboard.types import (
     ClipboardItem,
     ClipGetResult,

@@ -35,12 +35,12 @@ from rclipboard.types import (
     TopicsListResult,
 )
 
-from .app_state import (
+from rclipboard.app_state import (
     enqueue_request_topic,
     enqueue_request_topics,
     enqueue_topic_data,
 )
-from .log import get_logger
+from rclipboard.log import get_logger
 
 error = (get_logger(__name__)).error
 warning = (get_logger(__name__)).warning

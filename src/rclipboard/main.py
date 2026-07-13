@@ -8,10 +8,10 @@ from logging import Logger
 from fastapi import FastAPI
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-import rclipboard.http as http_mod
 import rclipboard.proxy as proxy_mod
-import rclipboard.uds as uds_mod
-import rclipboard.ws as ws_mod
+import rclipboard.transports.http as http_mod
+import rclipboard.transports.uds as uds_mod
+import rclipboard.transports.ws as ws_mod
 import rclipboard.xsel as xsel_mod
 from rclipboard.app_state import AppState
 from rclipboard.log import get_logger

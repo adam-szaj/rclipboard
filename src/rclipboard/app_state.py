@@ -191,7 +191,7 @@ class AppState:
         """
         # Lazy import: rpc_handler imports app_state, so importing at module
         # scope would be circular.
-        from rclipboard.rpc_handler import RPCHandler
+        from rclipboard.transports.rpc_handler import RPCHandler
         ts = self._utcnow()
         params = {"reason": reason, "ts_utc": ts}
         for client in list(self.clients):  # snapshot — sending may mutate clients

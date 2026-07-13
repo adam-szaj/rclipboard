@@ -6,10 +6,10 @@ from typing import override
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from pydantic import JsonValue, ValidationError
 
-from .app_state import register_client, unregister_client, unsubscribe_client
-from .log import get_logger as gl
-from .rpc_handler import RPCHandler
-from .types import JSONRPCRequestMessage, JSONRPCResponseMessage, RPCError
+from rclipboard.app_state import register_client, unregister_client, unsubscribe_client
+from rclipboard.log import get_logger as gl
+from rclipboard.transports.rpc_handler import RPCHandler
+from rclipboard.types import JSONRPCRequestMessage, JSONRPCResponseMessage, RPCError
 
 logger = gl(__name__)
 error = logger.error

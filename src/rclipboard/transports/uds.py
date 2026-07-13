@@ -12,7 +12,7 @@ from pydantic import JsonValue, ValidationError
 
 from rclipboard.app_state import register_client, unregister_client, unsubscribe_client
 from rclipboard.log import get_logger as gl
-from rclipboard.rpc_handler import RPCHandler
+from rclipboard.transports.rpc_handler import RPCHandler
 from rclipboard.types import JSONRPCRequestMessage, JSONRPCResponseMessage, RPCError
 
 logger = gl(__name__)
