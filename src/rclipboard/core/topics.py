@@ -38,5 +38,23 @@ class InternalTopicData(ABC):
         return bool(getattr(self.source, "is_remote_source", False))
 
     @property
+    def origin_host(self) -> str | None:
+        """Identity of the host this item originated on; ``None`` = this host.
+
+        Items forwarded by a proxy carry ``meta["via"]="proxy"`` +
+        ``meta["host"]`` (the originating host). Items ingested from the
+        upstream link without that stamp originated on the upstream host
+        itself. Used by conflict resolution: same origin → arrival order,
+        different origins → timestamps arbitrate.
+        """
+        if self.data.meta.get("via") == "proxy":
+            host = self.data.meta.get("host")
+            if host:
+                return str(host)
+        if self.is_remote:
+            return "<upstream>"
+        return None
+
+    @property
     def topic(self) -> str:
         return self.data.topic

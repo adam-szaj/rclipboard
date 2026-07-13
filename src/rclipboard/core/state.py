@@ -208,7 +208,11 @@ class AppState:
                          existing: InternalTopicData | None) -> bool:
         """Conflict resolution: decide whether `incoming` replaces `existing`.
 
-        Strategy ("newer wins; tie → local"):
+        Strategy ("newer wins; tie → local"), applied only ACROSS hosts:
+        - Messages originating on one host (see InternalTopicData.origin_host)
+          count in arrival order — timestamps only arbitrate between
+          *different* hosts. Clocks on one host are the same clock, so a rapid
+          local succession must never be dropped as a "tie".
         - No existing value, or either side lacks a comparable timestamp →
           accept (backwards compatible: legacy items without meta["ts"] behave
           as today).
@@ -226,6 +230,8 @@ class AppState:
         near-simultaneous values resolve deterministically to the local one.
         """
         if existing is None:
+            return True
+        if incoming.origin_host == existing.origin_host:
             return True
         new_ts = incoming.compare_ts
         old_ts = existing.compare_ts

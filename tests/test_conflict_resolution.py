@@ -118,15 +118,45 @@ class AcceptIncomingTests(unittest.IsolatedAsyncioTestCase):
         incoming = _itd("c", "stale", ts=_dt(10), remote=True)
         self.assertFalse(self._accept(incoming, existing))
 
-    def test_tie_keeps_existing_when_both_local(self):
+    def test_same_side_local_arrival_order_wins(self):
+        """Messages from one host count in arrival order — timestamps only
+        arbitrate between different hosts. A rapid local succession (same
+        clock!) must never be dropped as a 'tie'."""
         existing = _itd("c", "cur", ts=_dt(10), remote=False)
         incoming = _itd("c", "other", ts=_dt(10), remote=False)
-        self.assertFalse(self._accept(incoming, existing))
+        self.assertTrue(self._accept(incoming, existing))
 
-    def test_tie_keeps_existing_when_both_remote(self):
+    def test_same_side_remote_arrival_order_wins(self):
         existing = _itd("c", "cur", ts=_dt(10), remote=True)
         incoming = _itd("c", "other", ts=_dt(10), remote=True)
+        self.assertTrue(self._accept(incoming, existing))
+
+    def test_same_side_local_accepts_even_older_ts(self):
+        # Arrival order rules within one host regardless of stamped ts.
+        existing = _itd("c", "cur", ts=_dt(20), remote=False)
+        incoming = _itd("c", "late-stamped-old", ts=_dt(10), remote=False)
+        self.assertTrue(self._accept(incoming, existing))
+
+    def test_proxied_put_vs_local_put_uses_timestamps(self):
+        """At the upstream both items arrive on 'local' interfaces, but a put
+        forwarded by a proxy (meta via/host) originated on a DIFFERENT host —
+        timestamps must arbitrate, not arrival order."""
+        proxied = _td("c", "from-proxy")
+        proxied.meta.update({"via": "proxy", "host": "laptop"})
+        existing = InternalTopicData(data=proxied, source=_FakeLocalSource(),
+                                     compare_ts=_dt(20))
+        incoming = _itd("c", "older-direct", ts=_dt(10), remote=False)
         self.assertFalse(self._accept(incoming, existing))
+
+    def test_two_puts_from_same_proxied_host_arrival_order(self):
+        def _proxied(value: str, ts) -> InternalTopicData:
+            td = _td("c", value)
+            td.meta.update({"via": "proxy", "host": "laptop"})
+            return InternalTopicData(data=td, source=_FakeLocalSource(),
+                                     compare_ts=ts)
+        existing = _proxied("first", _dt(20))
+        incoming = _proxied("second-older-ts", _dt(10))
+        self.assertTrue(self._accept(incoming, existing))
 
     def test_tie_local_beats_existing_remote(self):
         # remis → wygrywa lokalny
