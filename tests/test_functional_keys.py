@@ -25,10 +25,21 @@ class KeysRegistryTests(unittest.TestCase):
         return f"http://127.0.0.1:{self.port}"
 
     # ── keys.list ────────────────────────────────────────────────────────────
+    def _list_keys(self) -> tuple[int, object]:
+        return get_json(
+            f"{self._base()}/v1/keys.list",
+            extra_headers={"Authorization": f"Bearer {ADMIN_TOKEN}"},
+        )
+
     def test_keys_list_empty(self):
-        status, body = get_json(f"{self._base()}/v1/keys.list")
+        status, body = self._list_keys()
         self.assertEqual(status, 200)
         self.assertEqual(body, {"keys": []})
+
+    def test_keys_list_requires_admin_token(self):
+        status, body = get_json(f"{self._base()}/v1/keys.list")
+        self.assertEqual(status, 403)
+        self.assertEqual(body["code"], 4031)
 
     # ── keys.publish ─────────────────────────────────────────────────────────
     def test_keys_publish_no_token_configured(self):
@@ -71,7 +82,7 @@ class KeysRegistryTests(unittest.TestCase):
         self.assertTrue(body["ok"])
         self.assertIn("key_id", body)
 
-        status, body = get_json(f"{self._base()}/v1/keys.list")
+        status, body = self._list_keys()
         self.assertEqual(status, 200)
         self.assertEqual(len(body["keys"]), 1)
         self.assertEqual(body["keys"][0]["public_key"], FAKE_KEY)

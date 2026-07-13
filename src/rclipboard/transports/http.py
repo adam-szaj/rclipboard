@@ -232,6 +232,7 @@ def install_module(app: FastAPI):
     @app.get("/v1/keys.list", response_model=KeysListResult)
     async def _keys_list(request: Request) -> KeysListResult:
         info(f"request from: {request.client}")
+        _require_admin(request, "Key registry not enabled")
         entries = [KeyEntry(**v) for v in app.state.main.public_keys.values()]
         return KeysListResult(keys=entries)
 

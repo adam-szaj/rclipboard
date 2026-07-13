@@ -745,7 +745,10 @@ class SoakEncryptionTests(SoakBase):
                 )
 
         with self._mc.measure("keys.list"):
-            _, body = get_json(f"http://127.0.0.1:{self.port}/v1/keys.list")
+            _, body = get_json(
+                f"http://127.0.0.1:{self.port}/v1/keys.list",
+                extra_headers={"Authorization": f"Bearer {ADMIN_TOKEN}"},
+            )
         assert isinstance(body, dict)
         n_keys = len(body.get("keys", []))
         self.assertLessEqual(n_keys, 30,

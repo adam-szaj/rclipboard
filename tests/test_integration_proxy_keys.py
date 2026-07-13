@@ -46,7 +46,10 @@ def _put_encrypted(port: int, value_b64: str) -> tuple[int, object]:
 
 
 def _keys_on(port: int) -> list[str]:
-    status, body = get_json(f"http://127.0.0.1:{port}/v1/keys.list")
+    status, body = get_json(
+        f"http://127.0.0.1:{port}/v1/keys.list",
+        extra_headers={"Authorization": f"Bearer {ADMIN_TOKEN}"},
+    )
     assert status == 200, body
     assert isinstance(body, dict)
     return [k["public_key"] for k in body["keys"]]

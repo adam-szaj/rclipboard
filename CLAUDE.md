@@ -318,7 +318,7 @@ The server is a **blind store** — it never encrypts or decrypts data. All encr
 **Public key registry** (`AppState.public_keys`):
 - `POST /v1/keys.publish` — register a public key; requires `Authorization: Bearer <RCLIPBOARD_ADMIN_TOKEN>`; returns 503 if token not configured
 - `keys.publish` over WS/raw UDS — same registration via JSON-RPC; the admin token travels in params (`{"public_key", "label", "token"}`); registering over a connection also marks the key as *presented* on it
-- `GET /v1/keys.list` — open; returns all registered keys
+- `GET /v1/keys.list` — requires `Authorization: Bearer <RCLIPBOARD_ADMIN_TOKEN>`; returns all registered keys
 - Registry is in-memory only (lost on restart)
 
 **Encrypted-content policy** — encrypted values are never *pushed* to peers without a registered key:

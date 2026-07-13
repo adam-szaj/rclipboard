@@ -190,7 +190,7 @@ When `stub: true` in an item, `value` is empty and the client should call
 | `health.get`  | `GET  /v1/health.get`    | —                    |
 | `status.get`  | `GET  /v1/status.get`    | —                    |
 | `keys.publish`| `POST /v1/keys.publish`  | `Authorization: Bearer <ADMIN_TOKEN>` |
-| `keys.list`   | `GET  /v1/keys.list`     | —                    |
+| `keys.list`   | `GET  /v1/keys.list`     | `Authorization: Bearer <ADMIN_TOKEN>` |
 | `proxy.connect`    | `POST /v1/proxy.connect`    | `Authorization: Bearer <ADMIN_TOKEN>` |
 | `proxy.disconnect` | `POST /v1/proxy.disconnect` | `Authorization: Bearer <ADMIN_TOKEN>` |
 
@@ -380,7 +380,8 @@ local).
 
 ### `keys.list`
 
-HTTP only.
+HTTP only. Requires `Authorization: Bearer <RCLIPBOARD_ADMIN_TOKEN>`
+(the CLI sends it from the `RCLIPBOARD_ADMIN_TOKEN` env var).
 Result: `{ "keys": [ { "key_id": "…", "public_key": "age1…", "label": "laptop" } ] }`
 
 ### `proxy.connect`
