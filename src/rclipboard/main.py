@@ -1,15 +1,14 @@
 # from __future__ import annotations
 
 import asyncio
-import os
 from contextlib import asynccontextmanager
 from logging import Logger
 
 from fastapi import FastAPI
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-import rclipboard.transports.proxy as proxy_mod
 import rclipboard.transports.http as http_mod
+import rclipboard.transports.proxy as proxy_mod
 import rclipboard.transports.uds as uds_mod
 import rclipboard.transports.ws as ws_mod
 import rclipboard.transports.xsel as xsel_mod
@@ -32,13 +31,10 @@ async def startup(app: FastAPI):
     # WS routes
     await ws_mod.install_module(app)
 
-    # optional raw UDS
-    if os.environ.get("RCLIPBOARD_RAW_UDS_PATH", "").strip():
-        uds_mod.install_raw_uds(app)
-    # optional xsel poller
-    if os.environ.get("RCLIPBOARD_XSEL", "0") != "0":
-        xsel_mod.install_xsel(app)
-    # optional proxy
+    # Optional modules gate themselves on their own env vars (single source
+    # of truth per module), so they are installed unconditionally here.
+    uds_mod.install_raw_uds(app)
+    xsel_mod.install_xsel(app)
     proxy_mod.install_proxy(app)
 
 
@@ -48,14 +44,12 @@ async def shutdown(app: FastAPI):
     # BEFORE uvicorn closes the WS connections — see that subclass for why. Here
     # we only tear down our own modules.
     main: AppState = app.state.main
-    xsel_enabled = os.environ.get("RCLIPBOARD_XSEL", "0") != "0"
-    raw_uds_enabled = bool(os.environ.get("RCLIPBOARD_RAW_UDS_PATH", "").strip())
+    # shutdown_* handlers are no-ops when their module was not installed, so
+    # no env re-reads are needed here (see startup).
     async with asyncio.TaskGroup() as tg:
         tg.create_task(proxy_mod.shutdown_proxy(app))
-        if raw_uds_enabled:
-            tg.create_task(uds_mod.shutdown_raw_uds(app))
-        if xsel_enabled:
-            tg.create_task(xsel_mod.shutdown_xsel(app))
+        tg.create_task(uds_mod.shutdown_raw_uds(app))
+        tg.create_task(xsel_mod.shutdown_xsel(app))
 
     await main.cancel_background_tasks()
     await main.flush_all_notifications()

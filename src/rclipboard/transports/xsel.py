@@ -385,6 +385,12 @@ class XselInterface(BidirectionalInterface):
 
 
 def install_xsel(app: FastAPI) -> None:
+    # Single gate for this module: XSEL_ENABLED is the one interpretation of
+    # RCLIPBOARD_XSEL (read at import time, as before). main.py calls this
+    # unconditionally, like the other install_* functions.
+    app.state.xsel = None
+    if not XSEL_ENABLED:
+        return
     conn = XselInterface(app)
     app.state.xsel = conn
     register_client(app, conn)
