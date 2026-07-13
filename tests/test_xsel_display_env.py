@@ -12,7 +12,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from rclipboard import xsel
+from rclipboard.transports import xsel
 
 
 class LoadDisplayEnvTests(unittest.TestCase):

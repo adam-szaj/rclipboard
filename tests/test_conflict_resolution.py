@@ -192,7 +192,7 @@ class ProxyNormalizeTsTests(unittest.TestCase):
     """ProxyClient._normalize_peer_ts applies the upstream clock offset."""
 
     def _client(self, offset_seconds: float | None):
-        from rclipboard.proxy import ProxyClient
+        from rclipboard.transports.proxy import ProxyClient
         c = ProxyClient.__new__(ProxyClient)  # skip __init__ (no event loop)
         c._clock_offset = (
             None if offset_seconds is None

@@ -55,7 +55,7 @@ _clipboard_item_to_topic_data = clipboard_item_to_topic_data
 
 
 def _build_monitor_snapshot(app: FastAPI) -> dict:
-    from rclipboard.proxy import get_proxy_status
+    from rclipboard.transports.proxy import get_proxy_status
     main = app.state.main
     now = time.monotonic()
     ts_utc = datetime.datetime.now(datetime.timezone.utc).isoformat()
@@ -225,7 +225,7 @@ def install_module(app: FastAPI):
                 status_code=403,
                 detail={"code": 4031, "message": "Forbidden"},
             )
-        from rclipboard.proxy import connect_proxy
+        from rclipboard.transports.proxy import connect_proxy
         await connect_proxy(app, body.endpoint, reconnect=body.reconnect)
         return ProxyConnectResult(ok=True, endpoint=body.endpoint)
 
@@ -244,7 +244,7 @@ def install_module(app: FastAPI):
                 status_code=403,
                 detail={"code": 4031, "message": "Forbidden"},
             )
-        from rclipboard.proxy import disconnect_proxy
+        from rclipboard.transports.proxy import disconnect_proxy
         await disconnect_proxy(app)
         return ProxyDisconnectResult(ok=True)
 

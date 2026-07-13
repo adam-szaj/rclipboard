@@ -286,8 +286,8 @@ class AppState:
         self._emit_runtime_state_change("clients")
 
     def get_health(self) -> HealthResult:
-        from rclipboard.proxy import get_proxy_status
-        from rclipboard.xsel import get_xsel_status
+        from rclipboard.transports.proxy import get_proxy_status
+        from rclipboard.transports.xsel import get_xsel_status
         xsel = get_xsel_status(self.app)
         proxy = get_proxy_status(self.app)
         return HealthResult(
@@ -299,8 +299,8 @@ class AppState:
         )
 
     def get_status(self, topics: list[str]) -> StatusResult:
-        from rclipboard.proxy import get_proxy_status
-        from rclipboard.xsel import get_xsel_status
+        from rclipboard.transports.proxy import get_proxy_status
+        from rclipboard.transports.xsel import get_xsel_status
         clients = [c.name for c in self.clients if isinstance(c, Interface)]
         now = _time.monotonic()
         topic_status = []
@@ -671,8 +671,8 @@ async def enqueue_request_topics(app: FastAPI) -> list[str] | None:
 
 
 def _make_client_info(client: Interface) -> ClientInfo:
-    from rclipboard.proxy import ProxyClient
-    from rclipboard.xsel import XselInterface
+    from rclipboard.transports.proxy import ProxyClient
+    from rclipboard.transports.xsel import XselInterface
     if isinstance(client, ProxyClient):
         kind = "proxy"
         addr = client.url if hasattr(client, "url") else None

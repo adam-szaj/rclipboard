@@ -104,7 +104,7 @@ class HandleEventThroughputTest(unittest.IsolatedAsyncioTestCase):
         })
         from fastapi import FastAPI
         from rclipboard.app_state import AppState
-        from rclipboard.proxy import ProxyClient
+        from rclipboard.transports.proxy import ProxyClient
 
         self.app = FastAPI()
         self.app.state.main = AppState(self.app)
@@ -230,7 +230,7 @@ class HandleEventThroughputTest(unittest.IsolatedAsyncioTestCase):
         place without relying on runtime timing (which is unreliable in CI).
         """
         import inspect
-        from rclipboard import proxy as proxy_module
+        from rclipboard.transports import proxy as proxy_module
 
         source = inspect.getsource(proxy_module.ProxyClient._handle_event)
 
@@ -253,7 +253,7 @@ class HandleEventThroughputTest(unittest.IsolatedAsyncioTestCase):
         snapshot ingestion) also uses nowait enqueue.
         """
         import inspect
-        from rclipboard import proxy as proxy_module
+        from rclipboard.transports import proxy as proxy_module
 
         source = inspect.getsource(proxy_module.ProxyClient._handle_response)
 
