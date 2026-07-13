@@ -165,6 +165,52 @@ class ProxyClient(RPCHandler):
     def _upstream_sync_delay_ms(self) -> int:
         return int(os.environ.get("RCLIPBOARD_UPSTREAM_SYNC_DELAY_MS", "5000"))
 
+    @property
+    def _upstream_admin_token(self) -> str:
+        """Token used to register keys upstream (falls back to the local one)."""
+        return (os.environ.get("RCLIPBOARD_UPSTREAM_ADMIN_TOKEN")
+                or os.environ.get("RCLIPBOARD_ADMIN_TOKEN", ""))
+
+    async def publish_key_upstream(self, public_key: str, label: str) -> None:
+        """Forward one key registration upstream (keys.publish over RPC).
+
+        Registering over the connection also marks the key as *presented* on
+        it, so encrypted content starts flowing to this proxy immediately.
+        Failures are logged, never raised — local registration must succeed
+        regardless of upstream availability.
+        """
+        if not self.connected or self.ws is None:
+            return
+        token = self._upstream_admin_token
+        if not token:
+            warning("proxy: cannot propagate key registration upstream — "
+                    "RCLIPBOARD_UPSTREAM_ADMIN_TOKEN/RCLIPBOARD_ADMIN_TOKEN not set")
+            return
+        try:
+            await self._send_json({
+                "jsonrpc": "2.0",
+                "id": next_id(),
+                "method": "keys.publish",
+                "params": {"public_key": public_key, "label": label,
+                           "token": token},
+            })
+            debug(f"proxy→upstream keys.publish label={label!r}")
+        except Exception as exc:
+            warning(f"proxy: keys.publish upstream failed: {exc}")
+
+    async def _publish_keys_upstream(self) -> None:
+        """Replay every locally registered key upstream (on connect).
+
+        Clients may have registered at this proxy before the upstream link
+        existed; without the replay the upstream would never send them
+        encrypted content. Runs BEFORE clip.watch so the initial-sync
+        contents already pass the upstream's encrypted-content gate.
+        """
+        registry: dict = dict(self.app.state.main.public_keys)
+        for entry in registry.values():
+            await self.publish_key_upstream(entry["public_key"],
+                                            entry.get("label", ""))
+
     @override
     async def send(self, data: TopicData):
         threshold = self._lazy_upstream_threshold
@@ -309,6 +355,12 @@ class ProxyClient(RPCHandler):
                 except Exception:
                     pending_future.set_result(None)
             return
+        if message_id != self._watch_id:
+            # Unmatched response (e.g. a keys.publish reply) — surface errors.
+            if "error" in message:
+                warning(f"proxy: upstream error reply id={message_id}: "
+                        f"{message['error']}")
+            return
         if message_id == self._watch_id:
             if "error" in message:
                 warning(
@@ -379,6 +431,9 @@ class ProxyClient(RPCHandler):
             self.app.state.proxy_connected = True
             self.last_connect_at = a.get_event_loop().time()
             self.connect_count += 1
+            # Key replay must precede the watch: the watch reply filters
+            # encrypted topics by the keys presented on this connection.
+            await self._publish_keys_upstream()
             await self._watch()
             async for message in ws:
                 if not isinstance(message, str):

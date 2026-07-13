@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import hashlib
 import json
+import os
 from abc import abstractmethod
 from typing import override
 
@@ -33,6 +35,8 @@ from rclipboard.models.wire import (
     ClipWatchParams,
     ClipWatchResult,
     HealthResult,
+    KeyPublishParams,
+    KeyPublishResult,
     RPCError,
     StatusResult,
     TopicData,
@@ -73,6 +77,11 @@ class RPCHandler(BidirectionalInterface):
         self.app = app
         self.topics: set[str] = set()
         self.public_key: str | None = None
+        # All keys this connection has presented (clip.watch public_key and/or
+        # keys.publish over this connection). A proxy represents many
+        # downstream clients, so encrypted-content gating checks whether ANY
+        # presented key is in the registry.
+        self.presented_keys: set[str] = set()
         self._is_rpc_transport: bool = True
         # How far this peer's clock leads ours (peer_now - our_now), learned
         # from the clip.watch handshake. Used to normalise the timestamps on
@@ -186,10 +195,38 @@ class RPCHandler(BidirectionalInterface):
             raise RPCMethodError(1001, "Topic not found",
                                  {"topic": params.topic})
         if content.meta.get("encrypted") is True:
-            pub_key = self.public_key
-            if not pub_key or pub_key not in self.app.state.main.public_keys:
+            if not self._has_registered_key():
                 raise RPCMethodError(4032, "Not registered")
         return ClipGetResult(item=_topic_data_to_clipboard_item(content))
+
+    def _has_registered_key(self) -> bool:
+        """True when any key presented on this connection is registered."""
+        registry = self.app.state.main.public_keys
+        return any(k in registry for k in self.presented_keys)
+
+    async def _handle_keys_publish(
+            self, request: JSONRPCRequestMessage) -> KeyPublishResult:
+        """Register a public key over the RPC transport.
+
+        Mirrors POST /v1/keys.publish (same admin gate, params carry the
+        token instead of a Bearer header) and additionally marks the key as
+        presented on THIS connection, so a proxy that replays its clients'
+        keys immediately passes the encrypted-content gates.
+        """
+        params = KeyPublishParams.model_validate(request.params or {})
+        admin_token = os.environ.get("RCLIPBOARD_ADMIN_TOKEN", "")
+        if not admin_token:
+            raise RPCMethodError(5031, "Key registry not enabled")
+        if params.token != admin_token:
+            raise RPCMethodError(4031, "Forbidden")
+        key_id = hashlib.sha256(params.public_key.encode()).hexdigest()[:16]
+        self.app.state.main.public_keys[params.public_key] = {
+            "public_key": params.public_key,
+            "label": params.label,
+            "key_id": key_id,
+        }
+        self.presented_keys.add(params.public_key)
+        return KeyPublishResult(ok=True, key_id=key_id)
 
     async def _handle_clip_watch(
             self, request: JSONRPCRequestMessage) -> ClipWatchResult:
@@ -199,6 +236,7 @@ class RPCHandler(BidirectionalInterface):
         params = ClipWatchParams.model_validate(request.params or {})
         if params.public_key:
             self.public_key = params.public_key
+            self.presented_keys.add(params.public_key)
         if params.peer_now_utc:
             self._record_peer_clock(params.peer_now_utc, server_now)
         new_topics = [
@@ -213,10 +251,7 @@ class RPCHandler(BidirectionalInterface):
         # (see AppState._dispatch_data_item); the initial-sync contents must
         # not leak them either. The subscription itself stays — the peer will
         # start receiving the topic once its key is registered.
-        key_registered = bool(
-            self.public_key
-            and self.public_key in self.app.state.main.public_keys)
-        if not key_registered:
+        if not self._has_registered_key():
             contents = {
                 topic: td for topic, td in contents.items()
                 if td.meta.get("encrypted") is not True
@@ -272,6 +307,8 @@ class RPCHandler(BidirectionalInterface):
                     result = await self._handle_status_get(request)
                 case "health.get":
                     result = await self._handle_health_get(request)
+                case "keys.publish":
+                    result = await self._handle_keys_publish(request)
                 case _:
                     raise RPCMethodError(
                         1003,

@@ -67,6 +67,9 @@ class ClipboardItem(BaseModel):
 class KeyPublishParams(BaseModel):
     public_key: str
     label: str = ""
+    # Admin token — required on the RPC (WS/UDS) transport where there is no
+    # Authorization header; the HTTP endpoint keeps using the Bearer header.
+    token: str = ""
 
 
 class KeyPublishResult(BaseModel):

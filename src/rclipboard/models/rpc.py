@@ -31,6 +31,7 @@ class JSONRPCRequestMessage(Message):
         "status.get",
         "health.get",
         "clip.changed",
+        "keys.publish",
     ]
     params: list[JsonValue] | dict[str, JsonValue] | None
 

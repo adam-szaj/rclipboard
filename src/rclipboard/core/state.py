@@ -269,8 +269,15 @@ class AppState:
                 if source and conn is source:
                     continue
                 if encrypted:
-                    pub_key = getattr(conn, "public_key", None)
-                    if not pub_key or pub_key not in self.public_keys:
+                    # Encrypted values go only to connections that presented
+                    # at least one registered key (a proxy presents the keys
+                    # of all its downstream clients). Duck-typed to avoid a
+                    # core -> transports import.
+                    presented = getattr(conn, "presented_keys", None)
+                    if presented is None:
+                        pk = getattr(conn, "public_key", None)
+                        presented = {pk} if pk else set()
+                    if not any(k in self.public_keys for k in presented):
                         continue
                 data = topic_data.data
                 if (self.lazy_local_threshold > 0

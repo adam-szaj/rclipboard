@@ -210,6 +210,15 @@ def install_module(app: FastAPI):
             "label": body.label,
             "key_id": key_id,
         }
+        # Live propagation: when this server is a proxy with an active
+        # upstream link, forward the registration so encrypted content
+        # starts flowing for this key (keys registered before the link
+        # existed are replayed on connect — see ProxyClient).
+        proxy_client = getattr(app.state, "proxy_client", None)
+        if proxy_client is not None and getattr(proxy_client, "connected", False):
+            with contextlib.suppress(Exception):
+                await proxy_client.publish_key_upstream(body.public_key,
+                                                        body.label)
         return KeyPublishResult(ok=True, key_id=key_id)
 
     @app.get("/v1/keys.list", response_model=KeysListResult)
