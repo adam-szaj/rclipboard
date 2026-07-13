@@ -61,7 +61,7 @@ def _build_monitor_snapshot(app: FastAPI) -> dict:
     ts_utc = datetime.datetime.now(datetime.timezone.utc).isoformat()
 
     clients = []
-    for iface, ci in main.client_info.items():
+    for iface, ci in main.monitor.client_info.items():
         connected_ago = round(now - ci.connected_at, 3)
         clients.append({
             "conn_id": ci.conn_id,
@@ -79,7 +79,7 @@ def _build_monitor_snapshot(app: FastAPI) -> dict:
         })
 
     topics = []
-    for tm in main.topic_meta.values():
+    for tm in main.monitor.topic_meta.values():
         stored_ago = round(now - tm.stored_at, 3)
         notified = {cid: round(now - t, 3) for cid, t in tm.notified_clients.items()}
         topics.append({
@@ -263,7 +263,7 @@ def install_module(app: FastAPI):
     async def _monitor_stream(ws: WebSocket):
         await ws.accept()
         main = app.state.main
-        q = main.subscribe_monitor()
+        q = main.monitor.subscribe()
         try:
             await ws.send_json({"kind": "snapshot", "data": _build_monitor_snapshot(app)})
             while True:
@@ -285,4 +285,4 @@ def install_module(app: FastAPI):
         except WebSocketDisconnect:
             pass
         finally:
-            main.unsubscribe_monitor(q)
+            main.monitor.unsubscribe(q)
