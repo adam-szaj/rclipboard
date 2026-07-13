@@ -10,7 +10,7 @@ from typing import override
 from fastapi import FastAPI
 from pydantic import JsonValue, ValidationError
 
-from rclipboard.app_state import register_client, unregister_client, unsubscribe_client
+from rclipboard.core.state import register_client, unregister_client, unsubscribe_client
 from rclipboard.log import get_logger as gl
 from rclipboard.models.rpc import notification_payload, response_payload
 from rclipboard.transports.rpc_handler import RPCHandler

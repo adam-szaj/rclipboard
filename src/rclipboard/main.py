@@ -13,7 +13,7 @@ import rclipboard.transports.http as http_mod
 import rclipboard.transports.uds as uds_mod
 import rclipboard.transports.ws as ws_mod
 import rclipboard.transports.xsel as xsel_mod
-from rclipboard.app_state import AppState
+from rclipboard.core.state import AppState
 from rclipboard.log import get_logger
 
 logger: Logger = get_logger(__name__)

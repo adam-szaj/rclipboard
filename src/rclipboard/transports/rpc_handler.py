@@ -7,7 +7,7 @@ from typing import override
 from fastapi import FastAPI
 from pydantic import JsonValue, ValidationError
 
-from rclipboard.app_state import (
+from rclipboard.core.state import (
     enqueue_request_topic,
     enqueue_request_topics,
     enqueue_topic_data,

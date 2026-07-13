@@ -35,7 +35,7 @@ from rclipboard.types import (
     TopicsListResult,
 )
 
-from rclipboard.app_state import (
+from rclipboard.core.state import (
     enqueue_request_topic,
     enqueue_request_topics,
     enqueue_topic_data,

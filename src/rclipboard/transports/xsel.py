@@ -10,7 +10,7 @@ from fastapi import FastAPI
 from pydantic import JsonValue
 
 # from asyncio.timeouts import timeout
-from rclipboard.app_state import (
+from rclipboard.core.state import (
     enqueue_topic_data,
     register_client,
     subscribe_client,

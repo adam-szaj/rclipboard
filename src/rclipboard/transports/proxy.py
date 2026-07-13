@@ -15,7 +15,7 @@ from fastapi import FastAPI
 from pydantic import JsonValue
 from websockets.asyncio.client import connect, unix_connect
 
-from rclipboard.app_state import (
+from rclipboard.core.state import (
     enqueue_request_topic,
     enqueue_topic_data,
     enqueue_topic_data_nowait,

@@ -1,6 +1,9 @@
 """Monitoring data structures (client/topic telemetry and monitor events)."""
+import time as _time
 from dataclasses import dataclass, field
 from enum import Enum
+
+from rclipboard.core.interfaces import Interface
 
 
 @dataclass
@@ -55,3 +58,35 @@ class MonitorEvent:
     conn_id: str | None = None
     topic: str | None = None
     data: dict = field(default_factory=dict)
+
+
+def _make_client_info(client: Interface) -> ClientInfo:
+    # Lazy imports + class-name string checks: transports import core, so a
+    # module-scope import here would be circular (kept as-is on purpose).
+    from rclipboard.transports.proxy import ProxyClient
+    from rclipboard.transports.xsel import XselInterface
+    if isinstance(client, ProxyClient):
+        kind = "proxy"
+        addr = client.url if hasattr(client, "url") else None
+    elif isinstance(client, XselInterface):
+        kind = "xsel"
+        addr = None
+    elif client.__class__.__name__ == "WSServerConnection":
+        kind = "ws"
+        ws = getattr(client, "ws", None)
+        addr = (f"{ws.client.host}:{ws.client.port}"
+                if ws and ws.client else None)
+    elif client.__class__.__name__ == "UDSServerConnection":
+        kind = "uds"
+        addr = None
+    else:
+        kind = "unknown"
+        addr = None
+    conn_id = f"{kind}:{addr}" if addr else f"{kind}:{id(client):x}"
+    return ClientInfo(
+        conn_id=conn_id,
+        kind=kind,
+        addr=addr,
+        app=None,
+        connected_at=_time.monotonic(),
+    )
