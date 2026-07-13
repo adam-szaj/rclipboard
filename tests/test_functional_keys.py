@@ -143,6 +143,69 @@ class KeysRegistryTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertTrue(body["item"]["encrypted"])
 
+    # ── clip.watch initial sync with encrypted content ───────────────────────
+    def _watch_contents(self, public_key: str | None) -> dict:
+        """Open a WS, send clip.watch (optionally with a key), return contents."""
+        import asyncio
+        import json
+
+        from websockets.asyncio.client import connect
+
+        async def _run() -> dict:
+            uri = f"ws://127.0.0.1:{self.port}/ws"
+            async with connect(uri) as ws:
+                params: dict = {"topics": ["c"]}
+                if public_key is not None:
+                    params["public_key"] = public_key
+                await ws.send(json.dumps({
+                    "jsonrpc": "2.0", "id": 1,
+                    "method": "clip.watch", "params": params,
+                }))
+                reply = json.loads(await asyncio.wait_for(ws.recv(), timeout=5))
+                return reply["result"].get("contents", {})
+
+        return asyncio.run(_run())
+
+    def test_watch_encrypted_not_replicated_without_key(self):
+        """Policy: encrypted values are never pushed to peers without a
+        registered key — the clip.watch initial sync included (previously it
+        leaked them while clip.changed correctly filtered)."""
+        self._put_encrypted()
+        contents = self._watch_contents(public_key=None)
+        self.assertNotIn("c", contents,
+                         "encrypted topic must not appear in the watch reply "
+                         "for a peer without a registered key")
+
+    def test_watch_encrypted_not_replicated_with_unregistered_key(self):
+        self._put_encrypted()
+        contents = self._watch_contents(public_key=OTHER_KEY)
+        self.assertNotIn("c", contents)
+
+    def test_watch_encrypted_replicated_with_registered_key(self):
+        post_json(
+            f"{self._base()}/v1/keys.publish",
+            {"public_key": FAKE_KEY, "label": "test"},
+            extra_headers={"Authorization": f"Bearer {ADMIN_TOKEN}"},
+        )
+        self._put_encrypted("dGVzdA==")
+        contents = self._watch_contents(public_key=FAKE_KEY)
+        self.assertIn("c", contents)
+        self.assertEqual(contents["c"]["value"]["value"], "dGVzdA==")
+
+    def test_watch_unencrypted_replicated_without_key(self):
+        """Plain values keep flowing in the watch reply regardless of keys."""
+        post_json(
+            f"{self._base()}/v1/clip.put",
+            {
+                "items": [{"topic": "c", "mime": "text/plain",
+                           "encoding": "utf-8", "value": "plain-ok"}],
+                "meta": {},
+            },
+        )
+        contents = self._watch_contents(public_key=None)
+        self.assertIn("c", contents)
+        self.assertEqual(contents["c"]["value"]["value"], "plain-ok")
+
 
 if __name__ == "__main__":
     unittest.main()

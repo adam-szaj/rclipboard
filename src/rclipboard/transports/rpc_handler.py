@@ -208,6 +208,19 @@ class RPCHandler(BidirectionalInterface):
         if new_topics:
             contents = subscribe_client(self.app, self, new_topics)
             self.topics.update(new_topics)
+        # Policy: encrypted values are never pushed to peers without a
+        # registered public key. The clip.changed dispatch already filters
+        # (see AppState._dispatch_data_item); the initial-sync contents must
+        # not leak them either. The subscription itself stays — the peer will
+        # start receiving the topic once its key is registered.
+        key_registered = bool(
+            self.public_key
+            and self.public_key in self.app.state.main.public_keys)
+        if not key_registered:
+            contents = {
+                topic: td for topic, td in contents.items()
+                if td.meta.get("encrypted") is not True
+            }
         threshold = self.app.state.main.lazy_local_threshold
         if threshold > 0:
             contents = {
