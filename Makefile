@@ -22,7 +22,7 @@ IMAGE ?= rclipboard:latest
 TUNEL_TEST_IMAGE ?= rcliptunel-test:latest
 DEPLOY_TEST_IMAGE ?= rclipboard-deploy-test:latest
 
-.PHONY: help install run run-dev run-uds run-https run-proxy run-dev-proxy cert cert-san health status topics docker-build docker-run docker-run-proxy docker-build-tunel-test plugin-install plugin-uninstall plugin-reload plugin-demo smoke proxy-smoke test test-functional test-integration test-http test-ws test-proxy-integration test-tunel test-https test-wss test-ssl-proxy-integration test-ssl test-soak test-soak-full systemd-user-install systemd-user-enable systemd-user-disable nvim-plugin-install nvim-plugin-pack install-no-systemd setup-wizard deploy deploy-dry docker-build-deploy-test test-deploy
+.PHONY: help install run run-dev run-uds run-https run-proxy run-dev-proxy cert cert-san health status topics docker-build docker-run docker-run-proxy docker-build-tunel-test plugin-install plugin-uninstall plugin-reload plugin-demo smoke proxy-smoke test test-functional test-integration test-http test-ws test-proxy-integration test-tunel test-https test-wss test-ssl-proxy-integration test-ssl test-soak test-soak-full test-install-docker test-install-docker-systemd systemd-user-install systemd-user-enable systemd-user-disable nvim-plugin-install nvim-plugin-pack install-no-systemd setup-wizard deploy deploy-dry docker-build-deploy-test test-deploy
 
 help:
 	@echo "Targets:"
@@ -54,6 +54,8 @@ help:
 	@echo "  test-tunel    - SSH tunnel smoke tests (requires docker-build-tunel-test)"
 	@echo "  test-functional - run functional HTTP/WS tests"
 	@echo "  test-integration - run integration tests"
+	@echo "  test-install-docker - installer tests in Docker (no systemd)"
+	@echo "  test-install-docker-systemd - installer tests in Docker with real systemd (privileged)"
 	@echo "  systemd-user-install - install user unit + venv + scripts + config"
 	@echo "  systemd-user-enable  - enable & start rclipboard.service"
 	@echo "  systemd-user-disable - disable rclipboard.service"
@@ -260,6 +262,23 @@ test-wss:
 
 test-ssl-proxy-integration:
 	PYTHONPATH=src .venv/bin/python -m unittest tests.test_integration_proxy_ssl -v
+
+# Installer tests in Docker: clean env without systemd (fake systemctl stub
+# from the test suite) and with a real booted systemd (systemctl --user).
+test-install-docker:
+	docker build -t rclipboard-test-install -f docker/test-install/Dockerfile .
+	docker run --rm rclipboard-test-install
+
+test-install-docker-systemd:
+	docker build -t rclipboard-test-install-systemd \
+		-f docker/test-install/Dockerfile.systemd .
+	docker rm -f rclipboard-test-install-systemd 2>/dev/null || true
+	docker run -d --name rclipboard-test-install-systemd --privileged \
+		--cgroupns=host -v /sys/fs/cgroup:/sys/fs/cgroup:rw \
+		rclipboard-test-install-systemd
+	sleep 3
+	docker exec rclipboard-test-install-systemd /usr/local/bin/systemd-test.sh; \
+	rc=$$?; docker rm -f rclipboard-test-install-systemd >/dev/null; exit $$rc
 
 docker-build-tunel-test:
 	docker build -t $(TUNEL_TEST_IMAGE) tests/docker/tunel/

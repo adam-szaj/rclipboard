@@ -1,0 +1,29 @@
+# Installer tests WITH real systemd: the container boots systemd as PID 1,
+# then the test script runs the installer as an unprivileged user against a
+# real `systemctl --user` (dbus user session via lingering) and asserts the
+# unit is loadable and startable.
+#
+# Build & run:  make test-install-docker-systemd
+FROM ubuntu:26.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        systemd systemd-sysv dbus dbus-user-session \
+        bash python3 python3-venv python3-pip ca-certificates curl jq \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN useradd -m -s /bin/bash tester
+
+COPY --chown=tester:tester . /home/tester/rclipboard
+COPY docker/test-install/systemd-test.sh /usr/local/bin/systemd-test.sh
+RUN chmod 0755 /usr/local/bin/systemd-test.sh
+
+# The layout suite runs `rclipboard config env` via sys.executable — the
+# package and its deps must be importable by the test interpreter.
+RUN su - tester -c "python3 -m venv /home/tester/venv \
+    && /home/tester/venv/bin/pip install --quiet /home/tester/rclipboard"
+
+# Boot systemd; the harness then `docker exec`s the test script.
+STOPSIGNAL SIGRTMIN+3
+CMD ["/sbin/init"]
