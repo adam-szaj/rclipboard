@@ -109,6 +109,13 @@ class ProxyClient(RPCHandler):
     # client originate on a remote peer, so they lose ties against local writes.
     is_remote_source: bool = True
 
+    # Monitoring classification (see Interface.monitor_kind).
+    monitor_kind: str = "proxy"
+
+    @override
+    def monitor_addr(self) -> str | None:
+        return self.url
+
     @property
     @override
     def name(self) -> str:

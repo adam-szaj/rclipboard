@@ -228,6 +228,9 @@ class XselState:
 
 class XselInterface(BidirectionalInterface):
 
+    # Monitoring classification (see Interface.monitor_kind).
+    monitor_kind: str = "xsel"
+
     def __init__(self, app: FastAPI):
         BidirectionalInterface.__init__(self)
         self.app = app

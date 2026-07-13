@@ -61,27 +61,11 @@ class MonitorEvent:
 
 
 def _make_client_info(client: Interface) -> ClientInfo:
-    # Lazy imports + class-name string checks: transports import core, so a
-    # module-scope import here would be circular (kept as-is on purpose).
-    from rclipboard.transports.proxy import ProxyClient
-    from rclipboard.transports.xsel import XselInterface
-    if isinstance(client, ProxyClient):
-        kind = "proxy"
-        addr = client.url if hasattr(client, "url") else None
-    elif isinstance(client, XselInterface):
-        kind = "xsel"
-        addr = None
-    elif client.__class__.__name__ == "WSServerConnection":
-        kind = "ws"
-        ws = getattr(client, "ws", None)
-        addr = (f"{ws.client.host}:{ws.client.port}"
-                if ws and ws.client else None)
-    elif client.__class__.__name__ == "UDSServerConnection":
-        kind = "uds"
-        addr = None
-    else:
-        kind = "unknown"
-        addr = None
+    # Classification is polymorphic: each transport declares monitor_kind and
+    # (optionally) monitor_addr on its Interface subclass, so no transport
+    # imports are needed here.
+    kind = client.monitor_kind
+    addr = client.monitor_addr()
     conn_id = f"{kind}:{addr}" if addr else f"{kind}:{id(client):x}"
     return ClientInfo(
         conn_id=conn_id,

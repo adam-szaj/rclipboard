@@ -10,6 +10,14 @@ from rclipboard.models.wire import TopicData
 
 class Interface(ABC):
 
+    # Monitoring classification — transports override these so core code can
+    # label connections (ClientInfo.kind/addr) without importing transport
+    # modules (which would be a circular import).
+    monitor_kind: str = "unknown"
+
+    def monitor_addr(self) -> str | None:
+        return None
+
     def __init__(self):
         pass
 

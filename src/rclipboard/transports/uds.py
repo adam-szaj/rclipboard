@@ -30,6 +30,9 @@ trace = logger.debug
 
 class UDSServerConnection(RPCHandler):
 
+    # Monitoring classification (see Interface.monitor_kind).
+    monitor_kind: str = "uds"
+
     def __init__(self, app: FastAPI, reader: a.StreamReader,
                  writer: a.StreamWriter):
         RPCHandler.__init__(self, app)

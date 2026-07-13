@@ -26,9 +26,18 @@ trace = logger.debug
 
 class WSServerConnection(RPCHandler):
 
+    # Monitoring classification (see Interface.monitor_kind).
+    monitor_kind: str = "ws"
+
     def __init__(self, app: FastAPI, ws: WebSocket):
         RPCHandler.__init__(self, app)
         self.ws: WebSocket = ws
+
+    @override
+    def monitor_addr(self) -> str | None:
+        ws = self.ws
+        return (f"{ws.client.host}:{ws.client.port}"
+                if ws and ws.client else None)
 
     @property
     @override
