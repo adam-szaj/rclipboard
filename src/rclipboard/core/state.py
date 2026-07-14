@@ -6,15 +6,13 @@ import datetime
 import os
 import time as _time
 from logging import Logger
-from typing import Any
 
 from fastapi import FastAPI
 
 from rclipboard.core.bus import (
-    Bus,
     GenericSerialCall,
     GetTopicData,
-    ItemType,
+    GetTopics,
     SetTopicData,
 )
 from rclipboard.core.interfaces import BidirectionalInterface, Interface
@@ -41,7 +39,7 @@ class AppState:
 
     def __init__(self, app: FastAPI):
         self.app: FastAPI = app
-        self.bus: Bus[GenericSerialCall] = Bus[GenericSerialCall]()
+        self.bus: asyncio.Queue[GenericSerialCall] = asyncio.Queue()
         self.clients: list[Interface] = []
         self.topic_content: dict[str, InternalTopicData] = {}
         self.subs: dict[str, set[Interface]] = {}
@@ -362,65 +360,61 @@ class AppState:
         self.monitor.record_put(topic_data)
         await self._schedule_notification(topic_data)
 
-    async def process_get_item(self, subject: str, topic: str,
-                               requester: "Interface | None" = None) -> ItemType:
-        debug(f"process_get_item subject='{subject}' topic='{topic}'")
-        content = None
-        if subject == "topic":
-            assert topic
-            content = self.topic_content.get(topic)
-            debug(
-                f"found content for topic '{topic}': '{content}' from: '{self.topic_content}'"
-            )
-            self.monitor.record_get(topic, content, requester)
-        elif subject == "topics":
-            content = list(self.topic_content.keys())
-        else:
-            content = None
+    def get_topic_item(
+            self, topic: str,
+            requester: "Interface | None" = None
+    ) -> InternalTopicData | None:
+        """Read one topic's stored item and record the get in monitoring.
 
+        Runs on the dispatcher (via GetTopicData), so it sees the store in a
+        serialised state with respect to concurrent puts.
+        """
+        content = self.topic_content.get(topic)
+        self.monitor.record_get(topic, content, requester)
         return content
 
+    def get_topic_list(
+            self, requester: "Interface | None" = None) -> list[str]:
+        """List all stored topics; runs on the dispatcher (via GetTopics)."""
+        _ = requester
+        return list(self.topic_content.keys())
+
     async def process_queue(self):
-        debug("bus.get -> item")
         item: GenericSerialCall = await self.bus.get()
-        debug(f"calling item: {item}")
         await item.call(self)
         self.bus.task_done()
-        debug("process_queue: done")
 
-    async def enqueue_request(
+    async def request_topic(
         self,
-        action: str,
-        data: Any,
+        topic: str,
         requester: "Interface | None" = None,
-    ) -> TopicData | list[str] | None:
-        if action.startswith("get:"):
-            if action.endswith(":topic"):
-                assert isinstance(data, str)
-                await self.flush_topic_notification(data)
-                req = GetTopicData(data, None, requester=requester)
-                debug(f"put request: {req}")
-                await self.bus.put(req)
-                debug("wait for future")
-                await req.future
-                internal_topic_data: InternalTopicData | None = (
-                    req.future.result())
-                if internal_topic_data:
-                    return internal_topic_data.data
-            if action.endswith(":topics"):
-                topics = list(self.topic_content.keys())
-                return topics
-        else:
-            raise ValueError("Bad request")
-        return None
+    ) -> TopicData | None:
+        """Fetch one topic's value. Flushes that topic's pending notification
+        first so the returned value reflects the latest buffered write."""
+        await self.flush_topic_notification(topic)
+        req = GetTopicData(topic, requester=requester)
+        await self.bus.put(req)
+        item = await req.future
+        return item.data if item else None
+
+    async def request_topics(
+        self,
+        requester: "Interface | None" = None,
+    ) -> list[str]:
+        """List all topics. Flushes ALL pending notifications first so the
+        returned set reflects every buffered write."""
+        await self.flush_all_notifications()
+        req = GetTopics(requester=requester)
+        await self.bus.put(req)
+        return await req.future
 
     async def enqueue_topic_data(self, data: InternalTopicData) -> None:
-        req = SetTopicData(data, None)
+        req = SetTopicData(data)
         await self.bus.put(req)
         await req.future
 
-    async def enqueue_topic_data_nowait(self, data: InternalTopicData):
-        await self.bus.put_nowait(SetTopicData(data, None))
+    def enqueue_topic_data_nowait(self, data: InternalTopicData):
+        self.bus.put_nowait(SetTopicData(data))
 
 
 def subscribe_client(app: FastAPI, client: Interface,
@@ -455,19 +449,13 @@ async def enqueue_request_topic(
 ) -> TopicData | None:
     assert isinstance(app.state.main, AppState)
     main: AppState = app.state.main
-    result = await main.enqueue_request("get:topic", topic, requester=requester)
-    if result and isinstance(result, TopicData):
-        return result
-    return None
+    return await main.request_topic(topic, requester=requester)
 
 
 async def enqueue_request_topics(app: FastAPI) -> list[str] | None:
     assert isinstance(app.state.main, AppState)
     main: AppState = app.state.main
-    result = await main.enqueue_request("get:topics", None)
-    if result:
-        assert isinstance(result, list)
-    return result
+    return await main.request_topics()
 
 
 def _resolve_compare_ts(data: TopicData,
@@ -509,5 +497,5 @@ async def enqueue_topic_data_nowait(app: FastAPI, data: TopicData,
         data=data, source=source,
         monitor_conn_id=monitor_conn_id, monitor_app=monitor_app,
         compare_ts=_resolve_compare_ts(data, compare_ts))
-    await app.state.main.enqueue_topic_data_nowait(internal_topic_data)
+    app.state.main.enqueue_topic_data_nowait(internal_topic_data)
     return internal_topic_data

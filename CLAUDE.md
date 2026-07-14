@@ -57,11 +57,11 @@ All transports share the same Pydantic models from `models/wire.py` and `models/
 `AppState` (`core/state.py`) contains:
 - `topic_content: dict[str, TopicData]` — stored topics
 - `subs: dict[str, set[Interface]]` — per-topic subscriber sets
-- `Bus` — an `asyncio.Queue` of `SerialCall` items (discriminated union of `GetTopicData` / `SetTopicData`)
+- `bus` — an `asyncio.Queue` of `SerialCall` command objects (discriminated union `GetTopicData` / `GetTopics` / `SetTopicData`)
 - A single dispatcher task that drains the queue sequentially, eliminating the need for locks
 - `_background_tasks: set` — tracks fire-and-forget tasks for lifecycle management
 
-Every write triggers debounced notifications (default 250 ms, `RCLIPBOARD_NOTIFY_DELAY_MS`). `clip.get` flushes pending notifications before returning to guarantee consistency.
+Every write triggers debounced notifications (default 250 ms, `RCLIPBOARD_NOTIFY_DELAY_MS`). Reads flush pending notifications before returning to guarantee consistency: `clip.get` flushes the requested topic (`request_topic`), `topics.list` flushes all pending writes (`request_topics`). All three commands run on the dispatcher, so gets and puts are serialised against each other.
 
 The dispatcher calls `deliver()` (sync) on subscribers rather than awaiting `send()` directly. This decouples slow subscribers from the dispatcher loop.
 
@@ -258,7 +258,7 @@ Encryption flags on `put`: `--encrypt` / `-E`, `--key <age1...>`, `--key-file <p
 | Module | Responsibility |
 |--------|-----------------|
 | `core/state.py` | `AppState`: central topic storage, subscriber management, dispatch queue, debounce logic, background task tracking, in-memory public key registry, `app.state.main` facade functions (`enqueue_*`, `*_client`) |
-| `core/bus.py` | `Bus` + `SerialCall` command objects drained sequentially by the dispatcher |
+| `core/bus.py` | `SerialCall` command objects (`GetTopicData`/`GetTopics`/`SetTopicData`), each carrying its own result future, drained sequentially by the dispatcher off `AppState.bus` (a plain `asyncio.Queue`) |
 | `core/interfaces.py` | `Interface`/`BidirectionalInterface` base classes with drainer infrastructure, `monitor_kind`/`monitor_addr` classification hooks |
 | `core/topics.py` | `InternalTopicData` (stored-item wrapper, conflict-resolution `compare_ts`, duck-typed `is_remote`) |
 | `core/monitoring.py` | Telemetry dataclasses + `MonitorHub` (client/topic counters, monitor-event queues, lifecycle/accounting hooks called by `AppState`) |

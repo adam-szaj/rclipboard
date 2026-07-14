@@ -1,4 +1,10 @@
-"""Serial-call bus: command objects drained sequentially by the dispatcher."""
+"""Serial-call command objects drained sequentially by the dispatcher.
+
+Each command carries its own result future; the dispatcher pulls it off the
+``AppState`` queue, ``call()``s it, and the awaiting requester wakes on the
+future. Running everything through one queue serialises access to the topic
+store without locks.
+"""
 import asyncio
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Generic, TypeVar, override
@@ -10,39 +16,12 @@ if TYPE_CHECKING:
     from rclipboard.core.state import AppState
 
 T = TypeVar("T")
-ItemType = InternalTopicData | list[str] | dict[str, str] | None
-
-
-class Bus(Generic[T]):
-
-    def __init__(self, **kwargs):
-        self.q: asyncio.Queue[T] = asyncio.Queue[T](**kwargs)
-
-    def task_done(self):
-        self.q.task_done()
-
-    async def get_nowait(self):
-        return self.q.get_nowait()
-
-    async def get(self):
-        return await self.q.get()
-
-    async def put(self, data: T):
-        return await self.q.put(data)
-
-    async def request(self, request: T):
-        pass
-
-    async def put_nowait(self, data: T):
-        return self.q.put_nowait(data)
 
 
 class SerialCall(ABC, Generic[T]):
 
-    def __init__(self, future: asyncio.Future[T] | None = None):
-        if future is None:
-            future = asyncio.Future()
-        self._future: asyncio.Future[T] = future
+    def __init__(self):
+        self._future: asyncio.Future[T] = asyncio.Future()
 
     @property
     def future(self) -> asyncio.Future[T]:
@@ -62,12 +41,8 @@ class SerialCall(ABC, Generic[T]):
 
 class SetTopicData(SerialCall[None]):
 
-    def __init__(
-        self,
-        topic_data: InternalTopicData,
-        future: asyncio.Future[None] | None,
-    ):
-        super().__init__(future)
+    def __init__(self, topic_data: InternalTopicData):
+        super().__init__()
         self.topic_data: InternalTopicData = topic_data
 
     @override
@@ -75,26 +50,27 @@ class SetTopicData(SerialCall[None]):
         await app.process_put_item(self.topic_data)
 
 
-class GetTopicData(SerialCall[InternalTopicData | None]):
+class GetTopicData(SerialCall["InternalTopicData | None"]):
 
-    def __init__(
-        self,
-        topic: str,
-        future: asyncio.Future[InternalTopicData | None] | None,
-        requester: "Interface | None" = None,
-    ):
-        super().__init__(future)
+    def __init__(self, topic: str, requester: "Interface | None" = None):
+        super().__init__()
         self.topic: str = topic
         self.requester: "Interface | None" = requester
 
     @override
-    async def do_call(self, app: "AppState") -> InternalTopicData | None:
-        item: ItemType = await app.process_get_item("topic", self.topic,
-                                                    self.requester)
-        if item is None:
-            return None
-        assert isinstance(item, InternalTopicData)
-        return item
+    async def do_call(self, app: "AppState") -> "InternalTopicData | None":
+        return app.get_topic_item(self.topic, self.requester)
 
 
-GenericSerialCall = GetTopicData | SetTopicData
+class GetTopics(SerialCall[list[str]]):
+
+    def __init__(self, requester: "Interface | None" = None):
+        super().__init__()
+        self.requester: "Interface | None" = requester
+
+    @override
+    async def do_call(self, app: "AppState") -> list[str]:
+        return app.get_topic_list(self.requester)
+
+
+GenericSerialCall = GetTopicData | GetTopics | SetTopicData

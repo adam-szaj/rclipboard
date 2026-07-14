@@ -215,7 +215,7 @@ class HandleEventThroughputTest(unittest.IsolatedAsyncioTestCase):
 
         # Assert the queue eventually drains (dispatcher is healthy).
         await asyncio.sleep(0.1)
-        final_qsize = self.app.state.main.bus.q.qsize()
+        final_qsize = self.app.state.main.bus.qsize()
         self.assertEqual(
             final_qsize, 0,
             f"queue not drained after 100ms: {final_qsize} items remain",
@@ -285,7 +285,7 @@ class HandleEventThroughputTest(unittest.IsolatedAsyncioTestCase):
                 source=None,
             )
 
-        qsize = self.app.state.main.bus.q.qsize()
+        qsize = self.app.state.main.bus.qsize()
         self.assertEqual(
             qsize, 0,
             f"expected empty queue after blocking flood, got qsize={qsize}",

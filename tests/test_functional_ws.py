@@ -138,6 +138,49 @@ class FunctionalWebSocketTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn('"method":"clip.changed"', compact)
             self.assertIn('"value":"hello-throttle"', compact)
 
+    async def test_topics_list_flushes_throttled_notification(self):
+        """topics.list must flush pending notifications before returning, so
+        its topic set reflects every buffered write (same guarantee as
+        clip.get, extended to the whole-registry query)."""
+        self.server_ctx.__exit__(None, None, None)
+        self.port = free_port()
+        self.server_ctx = running_server(
+            port=self.port,
+            extra_env={"RCLIPBOARD_NOTIFY_DELAY_MS": "5000"},
+        )
+        self.server_ctx.__enter__()
+
+        uri = f"ws://127.0.0.1:{self.port}/ws"
+        async with websockets.connect(uri) as watcher:
+            await watcher.send(
+                '{"jsonrpc":"2.0","id":"watch-tl","method":"clip.watch",'
+                '"params":{"topics":["c"]}}'
+            )
+            await asyncio.wait_for(watcher.recv(), timeout=5)
+
+            async with websockets.connect(uri) as writer:
+                await writer.send(
+                    '{"jsonrpc":"2.0","id":"put-tl","method":"clip.put",'
+                    '"params":{"items":[{"topic":"c","mime":"text/plain",'
+                    '"encoding":"utf-8","value":"tl-val"}],"meta":{}}}'
+                )
+                await asyncio.wait_for(writer.recv(), timeout=5)
+
+                # Notification is throttled (5 s debounce): not yet delivered.
+                with self.assertRaises(asyncio.TimeoutError):
+                    await asyncio.wait_for(watcher.recv(), timeout=0.2)
+
+                await writer.send(
+                    '{"jsonrpc":"2.0","id":"tl","method":"topics.list",'
+                    '"params":{}}'
+                )
+                reply = await asyncio.wait_for(writer.recv(), timeout=5)
+                self.assertIn('"id":"tl"', reply.replace(" ", ""))
+
+            # topics.list flushed the pending notification → watcher gets it.
+            event = await asyncio.wait_for(watcher.recv(), timeout=2)
+            self.assertIn('"method":"clip.changed"', event.replace(" ", ""))
+
 
 class ShutdownNoticeTests(unittest.IsolatedAsyncioTestCase):
     async def test_shutdown_notice_and_fast_exit(self):
