@@ -26,7 +26,7 @@ from rclipboard.models.wire import (
     TopicData,
     TopicStatus,
 )
-from rclipboard.timeutil import parse_utc_timestamp
+from rclipboard.timeutil import parse_utc_timestamp, utc_timestamp
 
 logger: Logger = get_logger(__name__)
 error = logger.error
@@ -55,6 +55,11 @@ class AppState:
         # gap between two human clipboard actions, so real updates aren't masked.
         self.sync_tie_window: datetime.timedelta = datetime.timedelta(
             milliseconds=int(os.environ.get("RCLIPBOARD_SYNC_TIE_MS", "100")))
+        # Retention for encrypted items: they expire this many seconds after
+        # their write time (meta["ts"]); on expiry the value is blanked to "".
+        # 0 disables the feature (encrypted items never expire). Default 30 s.
+        self.encrypted_ttl: datetime.timedelta = datetime.timedelta(
+            seconds=int(os.environ.get("RCLIPBOARD_ENCRYPTED_TTL_S", "30")))
         self.pending_notifications: dict[str, InternalTopicData] = {}
         self.notification_tasks: dict[str, asyncio.Task[None]] = {}
         self.notification_lock = asyncio.Lock()
@@ -111,6 +116,7 @@ class AppState:
             self.subs[topic].add(client)
             content = self.topic_content.get(topic)
             if content:
+                self._expire_if_needed(content)
                 contents[topic] = content.data
         self.monitor.client_subscribed(client, topics)
         self._emit_runtime_state_change("subscriptions")
@@ -163,6 +169,7 @@ class AppState:
             if itd is None:
                 topic_status.append(TopicStatus(topic=t))
                 continue
+            self._expire_if_needed(itd)
             ts_val = itd.data.meta.get("ts")
             stub = itd.data.stub
             size = None if stub else len(itd.data.value.value.encode())
@@ -360,6 +367,41 @@ class AppState:
         self.monitor.record_put(topic_data)
         await self._schedule_notification(topic_data)
 
+    def _expire_if_needed(self, itd: InternalTopicData) -> bool:
+        """Blank an encrypted item's value once its retention window elapses.
+
+        Encrypted items expire ``encrypted_ttl`` seconds after their write
+        time; on expiry the stored value is replaced by the empty string (the
+        topic keeps existing, the ``encrypted`` flag is preserved, and
+        ``meta["expired"]`` is set). Mutates ``itd`` in place so the ciphertext
+        is dropped from RAM on the first read that touches it.
+
+        Returns True only on the transition (freshly expired this call), so
+        callers can act on it; a no-op (disabled, plain item, no comparable
+        timestamp, still fresh, or already blanked) returns False.
+        """
+        if self.encrypted_ttl <= datetime.timedelta(0):
+            return False  # feature disabled
+        if itd.data.meta.get("encrypted") is not True:
+            return False
+        if not itd.data.value.value:
+            return False  # already blanked
+        # Prefer the clock-normalised compare_ts (remote items), else the
+        # item's own meta["ts"] (locally-written items share our clock).
+        ref = itd.compare_ts or parse_utc_timestamp(itd.data.meta.get("ts"))
+        if ref is None:
+            return False  # no comparable timestamp — cannot expire (legacy)
+        now = parse_utc_timestamp(utc_timestamp())
+        assert now is not None
+        if now - ref <= self.encrypted_ttl:
+            return False  # still within retention
+        itd.data.value.value = ""
+        itd.data.meta["expired"] = True
+        debug("encrypted item expired: topic=%s age=%.1fs ttl=%.0fs",
+              itd.topic, (now - ref).total_seconds(),
+              self.encrypted_ttl.total_seconds())
+        return True
+
     def get_topic_item(
             self, topic: str,
             requester: "Interface | None" = None
@@ -367,9 +409,12 @@ class AppState:
         """Read one topic's stored item and record the get in monitoring.
 
         Runs on the dispatcher (via GetTopicData), so it sees the store in a
-        serialised state with respect to concurrent puts.
+        serialised state with respect to concurrent puts. Expired encrypted
+        items are blanked before returning.
         """
         content = self.topic_content.get(topic)
+        if content is not None:
+            self._expire_if_needed(content)
         self.monitor.record_get(topic, content, requester)
         return content
 

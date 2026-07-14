@@ -26,6 +26,12 @@
     # error and minor skew; well below the gap between human clipboard actions.
     sync_tie_ms = 100
 
+    # Retention for ENCRYPTED messages (seconds). An encrypted item's value is
+    # blanked to "" this many seconds after it was written (meta["ts"]); the
+    # topic itself keeps existing. Plain items are unaffected. 0 disables the
+    # feature (encrypted items never expire). Default 30.
+    encrypted_ttl_s = 30
+
     # Admin token for key registry (POST /v1/keys.publish).
     # Leave empty to disable key registration.
     # admin_token = ""

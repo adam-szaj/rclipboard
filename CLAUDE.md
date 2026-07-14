@@ -117,6 +117,7 @@ Both the main server and a proxy may already hold buffered topics in memory when
 | `RCLIPCTL_PATH` | Path to `rclipctl` binary used by xsel encrypt mode (default: `rclipctl`) |
 | `RCLIPBOARD_NOTIFY_DELAY_MS` | Notification debounce delay (default: 250) |
 | `RCLIPBOARD_SYNC_TIE_MS` | Tie window (ms) for time-based conflict resolution; timestamps within it are a tie → local wins (default: 100) |
+| `RCLIPBOARD_ENCRYPTED_TTL_S` | Retention (seconds) for encrypted items: value blanked to `""` this long after `meta["ts"]`; `0` disables (default: 30) |
 | `RCLIPBOARD_GRACEFUL_TIMEOUT_S` | Bounded uvicorn graceful-shutdown wait (seconds) on SIGTERM before lingering connection tasks are force-cancelled so the process exits; default 8 |
 | `RCLIPBOARD_LOG_LEVEL` | App log level |
 | `RCLIPBOARD_PY_LOG_LEVEL` | Python logging level override |
@@ -325,6 +326,8 @@ The server is a **blind store** — it never encrypts or decrypts data. All encr
 - `clip.changed` dispatch (`AppState._dispatch_data_item`) skips connections whose presented keys (`RPCHandler.presented_keys` — populated from `clip.watch`'s `public_key` and from `keys.publish` over the connection) contain no registered key
 - the `clip.watch` reply filters encrypted topics out of `contents` under the same gate (the subscription itself is created, so the topic starts flowing once a key is registered)
 - `clip.get` (HTTP: `X-Age-Public-Key` header; WS/UDS: any presented key) returns 403/4032 without a registered key
+
+**Encrypted retention (TTL)** — encrypted items are short-lived. `AppState._expire_if_needed` blanks a stored encrypted item's value to `""` once `RCLIPBOARD_ENCRYPTED_TTL_S` (default 30 s; `0` disables) has elapsed since its write time (`compare_ts`, else `meta["ts"]`). Expiry is **lazy** — it triggers on the read paths (`get_topic_item` / `subscribe_client` initial sync / `get_status`) and mutates the store, so the ciphertext leaves RAM on the first read after the window. The topic is **not** deleted and it is **not** a 404: it keeps existing with `encrypted=true`, an empty value, and `meta["expired"]=true`. Plain items are never affected. Because the reference timestamp is the clock-normalised one, the window is consistent across a proxy/upstream link.
 
 **Key propagation (proxy → upstream)** — so proxy clients aren't starved by the policy: keys registered at the proxy *before* the upstream link exists are replayed on connect (before `clip.watch`); keys registered *while* connected are forwarded live. Both use the `keys.publish` RPC with `RCLIPBOARD_UPSTREAM_ADMIN_TOKEN` (fallback `RCLIPBOARD_ADMIN_TOKEN`); without a token the proxy logs a warning and skips propagation (encrypted topics then stay local).
 
