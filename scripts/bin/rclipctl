@@ -3,7 +3,7 @@
 set -euo pipefail
 
 if [ $# -lt 1 ]; then
-    echo "usage: $0 <put|get|exec|keygen|register|keys-list|status|topics|health> [options]" >&2
+    echo "usage: $0 <put|get|exec|keygen|register|unregister|keys-list|status|topics|health> [options]" >&2
     exit 1
 fi
 
@@ -187,6 +187,7 @@ KNOWN_KEYS_FILE="${RCLIPBOARD_KNOWN_KEYS_FILE:-$RCLIP_CONFIG_DIR/known_keys}"
 AGE_KEY_FILE="${RCLIPBOARD_AGE_KEY_FILE:-$RCLIP_CONFIG_DIR/age_key.txt}"
 REGISTER_TOKEN="${RCLIPBOARD_ADMIN_TOKEN:-}"
 REGISTER_LABEL=""
+renew=0
 
 HOST=127.0.0.1
 PORT=8989
@@ -205,6 +206,7 @@ Subcommands:
   exec --decrypt-input -- <cmd>              decrypt stdin, pipe plaintext to cmd stdin
   keygen                   generate age keypair for encryption
   register                 register public key with server (requires --token)
+  unregister               remove local keypair (server-side removal is a TODO)
   keys-list                list registered public keys
   status [options]         server status
   topics [options]         list topics
@@ -240,6 +242,7 @@ Clip options:
 Register options:
   --token <token>      admin token (or RCLIPBOARD_ADMIN_TOKEN env var)
   --label <label>      key label (default: hostname)
+  --renew              re-publish (renew) the registration
   -h|--help
 EOS
 }
@@ -296,7 +299,7 @@ fi
 # ── parse subcommand options ──────────────────────────────────────────────────
 args=$(getopt -o "a:cpsEet:h" \
     -l "app:,clipboard,primary,secondary,encoded,encrypt,fetch-keys,json,decrypt,help,encoding:,\
-endpoint:,host:,port:,transport:,uds:,topic:,config:,key:,key-file:,token:,label:" \
+endpoint:,host:,port:,transport:,uds:,topic:,config:,key:,key-file:,token:,label:,renew" \
     -- "$@")
 eval set -- "$args"
 
@@ -313,6 +316,7 @@ while true; do
         --key-file)     KNOWN_KEYS_FILE="$2";   shift 2 ;;
         --token)        REGISTER_TOKEN="$2";    shift 2 ;;
         --label)        REGISTER_LABEL="$2";    shift 2 ;;
+        --renew)        renew=1;                shift ;;
         --json)         json=1;                 shift ;;
         --decrypt)      decrypt=1;              shift ;;
         --encoding)     encoding=$2;            shift 2 ;;
@@ -583,6 +587,7 @@ call_get() {
 
 # ── key registry ─────────────────────────────────────────────────────────────
 call_register() {
+    [ "$renew" = 1 ] && echo "renewing registration (re-publishing key)" >&2
     local pub_key
     pub_key=$(cat "$RCLIP_CONFIG_DIR/age_key.pub" 2>/dev/null || true)
     if [ -z "$pub_key" ]; then
@@ -607,6 +612,24 @@ call_register() {
 call_keys_list() {
     curl "${CURL_SOCK_OPTS[@]}" "${ADMIN_AUTH_HDR[@]}" -fsS \
         "$(endpoint_url "/v1/keys.list")" | jq -c
+}
+
+call_unregister() {
+    # Stub: server-side key removal is not implemented (registry is in-memory;
+    # keys also vanish on server restart). This removes the LOCAL keypair so a
+    # machine can drop its identity. Always exits 0 so callers (e.g. the tmux
+    # plugin) can invoke it unconditionally.
+    local removed=0
+    for f in "$RCLIP_CONFIG_DIR/age_key.txt" "$RCLIP_CONFIG_DIR/age_key.pub"; do
+        if [ -e "$f" ]; then rm -f "$f"; removed=1; fi
+    done
+    if [ "$removed" = 1 ]; then
+        echo "removed local keypair from $RCLIP_CONFIG_DIR" >&2
+    else
+        echo "no local keypair to remove in $RCLIP_CONFIG_DIR" >&2
+    fi
+    echo "note: server-side key removal is not yet implemented (TODO)" >&2
+    exit 0
 }
 
 # ── status / topics / health ──────────────────────────────────────────────────
@@ -689,6 +712,7 @@ case "$mode" in
     put|clip)   call_put ;;
     get)        call_get ;;
     register)   call_register ;;
+    unregister) call_unregister ;;
     keys-list)  call_keys_list ;;
     status)     call_status ;;
     topics)     call_topics ;;
