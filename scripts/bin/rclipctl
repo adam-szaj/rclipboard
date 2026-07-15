@@ -176,6 +176,7 @@ unset _prev _arg
 # ── option defaults ───────────────────────────────────────────────────────────
 encoded=0
 json=0
+decrypt=0
 topic=c
 encoding=""
 mode="$cmd"
@@ -198,7 +199,7 @@ usage() {
     cat << EOS
 Subcommands:
   put [options]            read stdin and call clip.put
-  get [options]            call clip.get
+  get [options]            call clip.get (ciphertext as-is; add --decrypt to decrypt)
   clip [options]           alias for put
   exec --encrypt-output [enc-opts] -- <cmd>  run cmd, encrypt stdout, print to stdout
   exec --decrypt-input -- <cmd>              decrypt stdin, pipe plaintext to cmd stdin
@@ -227,6 +228,7 @@ Clip options:
   -t|--topic <topic>                              default: c
   -c|--clipboard | -p|--primary | -s|--secondary  shortcuts for -t c/p/s
   --json                                          print raw JSON result
+  --decrypt                                       decrypt an encrypted value (age)
   -a|--app <app>                                  meta.app tag
   --encoding base64|hex                           binary encoding
   -e|--encoded                                    stdin is already encoded (put)
@@ -293,7 +295,7 @@ fi
 
 # ── parse subcommand options ──────────────────────────────────────────────────
 args=$(getopt -o "a:cpsEet:h" \
-    -l "app:,clipboard,primary,secondary,encoded,encrypt,fetch-keys,json,help,encoding:,\
+    -l "app:,clipboard,primary,secondary,encoded,encrypt,fetch-keys,json,decrypt,help,encoding:,\
 endpoint:,host:,port:,transport:,uds:,topic:,config:,key:,key-file:,token:,label:" \
     -- "$@")
 eval set -- "$args"
@@ -312,6 +314,7 @@ while true; do
         --token)        REGISTER_TOKEN="$2";    shift 2 ;;
         --label)        REGISTER_LABEL="$2";    shift 2 ;;
         --json)         json=1;                 shift ;;
+        --decrypt)      decrypt=1;              shift ;;
         --encoding)     encoding=$2;            shift 2 ;;
         --endpoint)     ENDPOINT=$2; CLI_CONFIGURED=1; shift 2 ;;
         --transport)    TRANSPORT_SELECT=$2;    shift 2 ;;
@@ -554,7 +557,7 @@ call_get() {
     eval "$(printf '%s' "$resp" | jq -r '.item | "is_encrypted=\(.encrypted // false) mime=\(.mime // "empty") venc=\(.encoding // "empty")"')"
     val=$(printf '%s' "$resp" | jq -r '.item.value')
 
-    if [ "$is_encrypted" = "true" ]; then
+    if [ "$is_encrypted" = "true" ] && [ "$decrypt" = "1" ]; then
         require_age
         if [ ! -r "$AGE_KEY_FILE" ]; then
             echo "error: encrypted content but no key at $AGE_KEY_FILE" >&2
