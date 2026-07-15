@@ -194,10 +194,10 @@ Encrypt and send:
 echo -n 'secret' | ./scripts/bin/rclipctl put --encrypt -c --endpoint 127.0.0.1:8989
 ```
 
-Receive and auto-decrypt:
+Receive and decrypt (opt-in):
 
 ```bash
-./scripts/bin/rclipctl get -c --endpoint 127.0.0.1:8989
+./scripts/bin/rclipctl get -c --decrypt --endpoint 127.0.0.1:8989
 ```
 
 Use `exec` as a stdio encryption pipe (no server communication):
@@ -231,8 +231,8 @@ rclipctl register --token <admin_token>
 # 4. Encrypt and send
 echo "secret" | rclipctl put --encrypt --fetch-keys
 
-# 5. Receive and auto-decrypt on any registered machine
-rclipctl get
+# 5. Receive and decrypt on any registered machine
+rclipctl get --decrypt
 ```
 
 ### Key registry

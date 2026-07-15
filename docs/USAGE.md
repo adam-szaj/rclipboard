@@ -98,7 +98,7 @@ rclipctl get [topic] [options]
 | `--encoding base64\|hex` | Binary output encoding |
 | `--json` | Print raw JSON response |
 
-When the item has `encrypted: true`, `rclipctl get` automatically decrypts it using `~/.config/rclipboard/age_key.txt`. No extra flag needed.
+When the item has `encrypted: true`, `rclipctl get` returns the ciphertext as stored. Pass `--decrypt` to decrypt it with `~/.config/rclipboard/age_key.txt` (requires the `age` CLI). Decryption is opt-in so a plain `get` never silently reveals a secret.
 
 **Examples**
 

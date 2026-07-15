@@ -228,11 +228,10 @@ echo "secret text" | rclipctl put --encrypt --fetch-keys
 # --key-file ~/.config/rclipboard/known_keys  for a local key list
 ```
 
-**Receive (auto-decrypt)**
+**Receive (decrypt explicitly)**
 
 ```bash
-rclipctl get
-# rclipctl detects encrypted=true and decrypts using age_key.txt automatically
+rclipctl get --decrypt
 ```
 
 **X11 xsel with encryption**
