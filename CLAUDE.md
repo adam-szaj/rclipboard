@@ -329,6 +329,14 @@ The server is a **blind store** — it never encrypts or decrypts data. All encr
 
 **Encrypted retention (TTL)** — encrypted items are short-lived. `AppState._expire_if_needed` blanks a stored encrypted item's value to `""` once `RCLIPBOARD_ENCRYPTED_TTL_S` (default 30 s; `0` disables) has elapsed since its write time (`compare_ts`, else `meta["ts"]`). Expiry is **lazy** — it triggers on the read paths (`get_topic_item` / `subscribe_client` initial sync / `get_status`) and mutates the store, so the ciphertext leaves RAM on the first read after the window. The topic is **not** deleted and it is **not** a 404: it keeps existing with `encrypted=true`, an empty value, and `meta["expired"]=true`. Plain items are never affected. Because the reference timestamp is the clock-normalised one, the window is consistent across a proxy/upstream link.
 
+**Key registry TODO (not yet implemented)** — planned symmetry with message
+retention: registered public keys that are not renewed within a `key-ttl` are
+auto-evicted from the in-memory registry; renewal is `rclipctl register --renew`
+(refreshes the key's `registered_at`); a `keys.delete` endpoint (admin-token
+gated, HTTP + RPC) enables real end-to-end `rclipctl unregister`. Today
+`rclipctl unregister` only drops the LOCAL keypair; server-side removal relies
+on the registry being in-memory (cleared on restart).
+
 **Key propagation (proxy → upstream)** — so proxy clients aren't starved by the policy: keys registered at the proxy *before* the upstream link exists are replayed on connect (before `clip.watch`); keys registered *while* connected are forwarded live. Both use the `keys.publish` RPC with `RCLIPBOARD_UPSTREAM_ADMIN_TOKEN` (fallback `RCLIPBOARD_ADMIN_TOKEN`); without a token the proxy logs a warning and skips propagation (encrypted topics then stay local).
 
 **`rclipctl` encryption workflow:**
