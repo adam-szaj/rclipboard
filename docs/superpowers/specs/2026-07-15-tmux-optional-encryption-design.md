@@ -23,10 +23,13 @@ We want the plugin to expose, without changing any default key bindings:
 - **`default` follows the plugin option `@rclip_encrypt`** (`on`/`off`, default
   `off`) that the user sets in their `.tmux.conf`. `copy-default` /
   `paste-default` resolve the mode from this option at call time.
-- **paste-clear does NOT decrypt** — it returns the stored value verbatim, with
-  no `age --decrypt` attempt. No guard, no "refuse if encrypted": just raw.
-- **paste-encrypted = auto** — normal `rclipctl get` behaviour (decrypts when
-  encrypted, passes plaintext through).
+- **`rclipctl get` no longer auto-decrypts** — decryption becomes opt-in via a
+  new `--decrypt` flag. This is the safer default (a plaintext dump never
+  silently decrypts a secret) and is a **breaking change** for every `get`
+  consumer, not just tmux. We update the user-facing docs and tests to match.
+- **paste-clear** = plain `rclipctl get` (now returns the stored value as-is,
+  no decryption). No new flag needed.
+- **paste-encrypted** = `rclipctl get --decrypt` (explicitly decrypts).
 - **No default binding changes** — the plugin only *provides* the commands
   (as `@rclip_*_cmd` tmux options); the user wires up keys themselves.
 - **register via `display-popup`** — interactive prompt for the admin token
@@ -46,8 +49,8 @@ We want the plugin to expose, without changing any default key bindings:
 | copy-clear | `rclipctl put` (plaintext, current behaviour) |
 | copy-encrypted | `rclipctl put -E --fetch-keys` |
 | copy-default | resolve `@rclip_encrypt`: on→encrypted, off→clear |
-| paste-clear | fetch stored value WITHOUT decrypting (raw), then paste |
-| paste-encrypted | `rclipctl get` (auto-decrypt), then paste |
+| paste-clear | `rclipctl get` (no decryption — the new default), then paste |
+| paste-encrypted | `rclipctl get --decrypt`, then paste |
 | paste-default | resolve `@rclip_encrypt`: on→paste-encrypted, off→paste-clear |
 | rclipboard-register | `display-popup` prompt → `rclipctl register --token ...` |
 | rclipboard-unregister | `rclipctl unregister` (stub) + remove local keypair |
@@ -65,9 +68,9 @@ We want the plugin to expose, without changing any default key bindings:
 - Depends on: `rclipctl`, tmux (for reading the option), stdin (the selection).
 
 **`scripts/paste.sh --mode <clear|encrypted|default>`**
-- `clear` → fetch raw value without decryption (see rclipctl `--no-decrypt`
-  below), `tmux load-buffer` + `paste-buffer -d`.
-- `encrypted` → current path: `rclipctl get -t $TOPIC` (auto-decrypt).
+- `clear` → `rclipctl get -t $TOPIC` (no decryption, the new default),
+  `tmux load-buffer` + `paste-buffer -d`.
+- `encrypted` → `rclipctl get -t $TOPIC --decrypt`.
 - `default` → resolve `@rclip_encrypt` → clear or encrypted.
 - Depends on: `rclipctl`, tmux.
 
@@ -104,10 +107,16 @@ We want the plugin to expose, without changing any default key bindings:
 - For now an alias of plain `register` (re-publishes the key). Full
   renew/TTL semantics are a server TODO. Documented as such.
 
-**`scripts/bin/rclipctl` — `get --no-decrypt` (or `--raw`) flag**
-- Returns the stored value without attempting `age --decrypt`, applying only
-  the normal output-encoding path. Needed by `paste-clear`. Small, reusable
-  addition to `call_get`.
+**`scripts/bin/rclipctl` — `get` default changes to NO decryption; add `--decrypt`**
+- BREAKING: `call_get` no longer auto-decrypts when `is_encrypted=true`. By
+  default it returns the stored (possibly ciphertext) value through the normal
+  output-encoding path. The `--decrypt` flag restores the old `age --decrypt`
+  behaviour (requires the local key; errors as today if missing/mismatched).
+- All user-facing docs describing "get auto-decrypts" are updated (README.md,
+  docs/USAGE.md, docs/CONFIGURE.md, rclipctl usage text): the encryption
+  workflow's final step becomes `rclipctl get --decrypt`.
+- Existing tests that assert auto-decrypt on plain `get` are updated to pass
+  `--decrypt`; a new test asserts plain `get` returns ciphertext (no decrypt).
 
 ## Error handling
 
@@ -127,12 +136,15 @@ We want the plugin to expose, without changing any default key bindings:
   - `copy.sh --mode encrypted` invokes `put … -E --fetch-keys`;
   - `copy.sh --mode clear` (and no arg) invokes `put` without `-E`;
   - `copy.sh --mode default` honours `@rclip_encrypt` on/off;
-  - `paste.sh --mode clear` calls `get --no-decrypt`;
-  - `paste.sh --mode encrypted` calls `get` (auto).
-- **Server repo:** unittest for `rclipctl unregister` — creates a temp keypair,
-  runs `unregister`, asserts the files are gone and exit 0; and that
-  `unregister` with no keypair still exits 0.
-- Full server suite must stay green (rclipctl changes are additive).
+  - `paste.sh --mode clear` calls `get` WITHOUT `--decrypt`;
+  - `paste.sh --mode encrypted` calls `get --decrypt`.
+- **Server repo:**
+  - unittest for `rclipctl unregister` — creates a temp keypair, runs
+    `unregister`, asserts the files are gone and exit 0; `unregister` with no
+    keypair still exits 0.
+  - `get --decrypt` decrypts encrypted content (moved from the old implicit
+    behaviour); plain `get` on encrypted content returns the ciphertext.
+- Full server suite stays green; get-related tests updated for the new default.
 
 ## Out of scope (server TODO, separate task)
 
