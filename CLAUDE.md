@@ -314,7 +314,7 @@ The server is a **blind store** — it never encrypts or decrypts data. All encr
 **`ClipboardItem.encrypted`** — bool field (default `false`). When `true`:
 - `value` contains base64-encoded age ciphertext
 - `clip.get` over HTTP requires `X-Age-Public-Key: age1...` header with a key registered in the server's in-memory registry; returns 403 if missing or unknown
-- `rclipctl get` auto-decrypts using the local private key
+- `rclipctl get --decrypt` decrypts using the local private key (decryption is opt-in; plain `rclipctl get` returns the ciphertext as stored)
 
 **Public key registry** (`AppState.public_keys`):
 - `POST /v1/keys.publish` — register a public key; requires `Authorization: Bearer <RCLIPBOARD_ADMIN_TOKEN>`; returns 503 if token not configured
@@ -344,7 +344,7 @@ on the registry being in-memory (cleared on restart).
 rclipctl keygen                          # generate keypair
 rclipctl register --token <admin_token>  # register public key with server
 echo "secret" | rclipctl put --encrypt --fetch-keys  # encrypt + send
-rclipctl get                             # auto-decrypt
+rclipctl get --decrypt                   # decrypt (opt-in; plain get returns ciphertext)
 ```
 
 **`rclipctl exec` — pure stdio encryption pipe** (no server communication):
