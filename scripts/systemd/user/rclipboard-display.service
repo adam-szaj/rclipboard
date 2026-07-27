@@ -26,7 +26,7 @@ ExecStart=/bin/sh -c '\
     : > "$FILE.tmp"; \
     for V in DISPLAY WAYLAND_DISPLAY XAUTHORITY; do \
         LINE=$(systemctl --user show-environment | grep "^$V=") || continue; \
-        printf "%s\\n" "$LINE" >> "$FILE.tmp"; \
+        printf "%%s\\n" "$LINE" >> "$FILE.tmp"; \
     done; \
     mv "$FILE.tmp" "$FILE"'
 # When the graphical session stops, drop the file so xsel correctly reports
