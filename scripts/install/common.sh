@@ -1,24 +1,27 @@
 #!/usr/bin/env bash
 
 managed_file_has_marker() {
-    local path="$1" marker="$2" first_line="" second_line=""
+    local path="$1" marker="$2" format="${3:-plain}"
+    local first_line="" second_line=""
 
     [ -f "$path" ] && [ ! -L "$path" ] || return 1
     {
         IFS= read -r first_line || true
         IFS= read -r second_line || true
     } < "$path"
-    [ "$first_line" = "$marker" ] || {
+    if [ "$format" = xml ]; then
         [ "$first_line" = '<?xml version="1.0" encoding="UTF-8"?>' ] \
             && [ "$second_line" = "$marker" ]
-    }
+    else
+        [ "$first_line" = "$marker" ]
+    fi
 }
 
 check_managed_file_collision() {
-    local path="$1" marker="$2"
+    local path="$1" marker="$2" format="${3:-plain}"
 
     if [ -e "$path" ] || [ -L "$path" ]; then
-        if ! managed_file_has_marker "$path" "$marker"; then
+        if ! managed_file_has_marker "$path" "$marker" "$format"; then
             printf 'error: refusing to overwrite unmanaged file: %s\n' "$path" >&2
             return 1
         fi
@@ -26,9 +29,9 @@ check_managed_file_collision() {
 }
 
 remove_marked_file() {
-    local path="$1" marker="$2"
+    local path="$1" marker="$2" format="${3:-plain}"
 
-    if managed_file_has_marker "$path" "$marker"; then
+    if managed_file_has_marker "$path" "$marker" "$format"; then
         rm -f "$path"
     fi
 }
