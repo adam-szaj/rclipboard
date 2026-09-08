@@ -8,6 +8,8 @@ INSTALL_SOURCE_DIR="$SCRIPT_DIR"
 
 REMOTE=origin
 BRANCH=""
+REMOTE_WAS_SET=0
+BRANCH_WAS_SET=0
 TRANSPORT=uds
 START_SERVICE=1
 PURGE_USER_DATA=0
@@ -44,11 +46,13 @@ while [ "$#" -gt 0 ]; do
         --remote)
             require_option_value "$1" "$#"
             REMOTE="$2"
+            REMOTE_WAS_SET=1
             shift 2
             ;;
         --branch)
             require_option_value "$1" "$#"
             BRANCH="$2"
+            BRANCH_WAS_SET=1
             shift 2
             ;;
         --transport)
@@ -82,6 +86,12 @@ while [ "$#" -gt 0 ]; do
             OPERATION=update
             shift
             ;;
+        --internal-refresh)
+            [ "$OPERATION" = install ] \
+                || die "only one lifecycle operation may be selected"
+            OPERATION=internal-refresh
+            shift
+            ;;
         -h|--help)
             usage
             exit 0
@@ -101,10 +111,7 @@ if [ "$PURGE_USER_DATA" -eq 1 ] \
 fi
 
 case "$OPERATION" in
-    install|reset|uninstall) ;;
-    update)
-        die "$OPERATION is not available until its lifecycle implementation is installed"
-        ;;
+    install|reset|uninstall|update|internal-refresh) ;;
 esac
 
 APP_DIR="$(resolve_app_dir)"
@@ -114,6 +121,21 @@ VENV_DIR="$APP_DIR/venv"
 INSTALLER_DIR="$APP_DIR/installer"
 METADATA_FILE="$APP_DIR/install.conf"
 CONFIG_FILE="$APP_DIR/config.toml"
+
+if [ "$OPERATION" = update ]; then
+    requested_remote="$REMOTE"
+    requested_branch="$BRANCH"
+    validate_app_dir_for_cleanup
+    read_install_metadata "$METADATA_FILE"
+    if [ "$REMOTE_WAS_SET" -eq 1 ]; then
+        REMOTE="$requested_remote"
+    fi
+    if [ "$BRANCH_WAS_SET" -eq 1 ]; then
+        BRANCH="$requested_branch"
+    fi
+    perform_update
+    exit 0
+fi
 
 if [ "$OPERATION" = uninstall ]; then
     validate_app_dir_for_cleanup
@@ -143,7 +165,26 @@ if [ "$OPERATION" = uninstall ]; then
     exit 0
 fi
 
-REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+SOURCE_REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd -P)"
+if [ "$OPERATION" = internal-refresh ]; then
+    requested_remote="$REMOTE"
+    requested_branch="$BRANCH"
+    validate_app_dir_for_cleanup
+    read_install_metadata "$METADATA_FILE"
+    RECORDED_REPO_DIR="$REPO_DIR"
+    [ "$RECORDED_REPO_DIR" = "$SOURCE_REPO_DIR" ] \
+        || die "internal refresh does not match the recorded source checkout"
+    if [ "$REMOTE_WAS_SET" -eq 1 ]; then
+        REMOTE="$requested_remote"
+    fi
+    if [ "$BRANCH_WAS_SET" -eq 1 ]; then
+        BRANCH="$requested_branch"
+    fi
+    REPO_DIR="$SOURCE_REPO_DIR"
+    require_update_checkout
+else
+    REPO_DIR="$SOURCE_REPO_DIR"
+fi
 require_python_311
 require_git_checkout
 require_single_line_value repo_dir "$REPO_DIR"
@@ -226,12 +267,18 @@ PY
 fi
 
 service_install || die "failed to install $SERVICE_PLATFORM service"
-write_install_metadata "$METADATA_FILE" \
-    "$REPO_DIR" "$REMOTE" "$BRANCH" \
-    || die "failed to write installation metadata"
-
-if [ "$START_SERVICE" -eq 1 ]; then
-    service_start || die "failed to start $SERVICE_PLATFORM service"
+if [ "$OPERATION" = internal-refresh ]; then
+    service_restart || die "failed to restart $SERVICE_PLATFORM service"
+    write_install_metadata "$METADATA_FILE" \
+        "$REPO_DIR" "$REMOTE" "$BRANCH" \
+        || die "failed to write installation metadata"
+else
+    write_install_metadata "$METADATA_FILE" \
+        "$REPO_DIR" "$REMOTE" "$BRANCH" \
+        || die "failed to write installation metadata"
+    if [ "$START_SERVICE" -eq 1 ]; then
+        service_start || die "failed to start $SERVICE_PLATFORM service"
+    fi
 fi
 
 printf '\nInstalled rclipboard user service.\n'

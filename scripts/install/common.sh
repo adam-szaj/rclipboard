@@ -59,7 +59,7 @@ current_git_branch() {
 }
 
 require_git_target() {
-    git -C "$REPO_DIR" remote get-url "$REMOTE" >/dev/null 2>&1 \
+    git -C "$REPO_DIR" remote get-url -- "$REMOTE" >/dev/null 2>&1 \
         || die "Git remote does not exist: $REMOTE"
     git check-ref-format --branch "$BRANCH" >/dev/null 2>&1 \
         || die "invalid Git branch: $BRANCH"
@@ -68,6 +68,51 @@ require_git_target() {
         && ! git -C "$REPO_DIR" show-ref --verify --quiet \
             "refs/remotes/$REMOTE/$BRANCH"; then
         die "Git branch does not exist locally or for $REMOTE: $BRANCH"
+    fi
+}
+
+require_update_checkout() {
+    local checked_out status
+
+    case "$REPO_DIR" in
+        /*) ;;
+        *) die "recorded source checkout must be an absolute path: $REPO_DIR" ;;
+    esac
+    require_git_checkout
+    require_single_line_value remote "$REMOTE"
+    require_single_line_value branch "$BRANCH"
+    git -C "$REPO_DIR" remote get-url -- "$REMOTE" >/dev/null 2>&1 \
+        || die "Git remote does not exist: $REMOTE"
+    git check-ref-format --branch "$BRANCH" >/dev/null 2>&1 \
+        || die "invalid Git branch: $BRANCH"
+    git check-ref-format "refs/remotes/$REMOTE/$BRANCH" >/dev/null 2>&1 \
+        || die "invalid Git remote or branch: $REMOTE/$BRANCH"
+    status=$(git -C "$REPO_DIR" status --porcelain) \
+        || die "cannot inspect Git checkout: $REPO_DIR"
+    [ -z "$status" ] || die "update requires a clean worktree"
+    checked_out=$(git -C "$REPO_DIR" symbolic-ref --quiet --short HEAD 2>/dev/null) \
+        || die "update requires branch $BRANCH to be checked out"
+    [ "$checked_out" = "$BRANCH" ] \
+        || die "update requires branch $BRANCH to be checked out"
+}
+
+perform_update() {
+    local remote_ref
+
+    require_update_checkout
+    git -C "$REPO_DIR" fetch -- "$REMOTE" "$BRANCH" \
+        || die "failed to fetch $REMOTE branch $BRANCH"
+    remote_ref="refs/remotes/$REMOTE/$BRANCH"
+    git -C "$REPO_DIR" rev-parse --verify "$remote_ref^{commit}" \
+        >/dev/null 2>&1 \
+        || die "fetched branch is unavailable: $REMOTE/$BRANCH"
+    git -C "$REPO_DIR" merge-base --is-ancestor HEAD "$remote_ref" \
+        || die "local and remote history cannot be fast-forwarded"
+    git -C "$REPO_DIR" merge --ff-only "$remote_ref" \
+        || die "failed to fast-forward from $REMOTE/$BRANCH"
+    if ! "$REPO_DIR/scripts/install.sh" --internal-refresh \
+        --remote "$REMOTE" --branch "$BRANCH"; then
+        die "checkout was updated but installation refresh failed; retry rclipboard-update or reset the installation"
     fi
 }
 
