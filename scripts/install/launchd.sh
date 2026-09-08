@@ -90,6 +90,11 @@ service_start() {
     fi
 }
 
+service_print_status_hint() {
+    printf '  Status:   launchctl print gui/%s/%s\n' \
+        "$USER_ID" "$LAUNCHD_LABEL"
+}
+
 service_stop() {
     launchd_bootout_plist || return $?
 }

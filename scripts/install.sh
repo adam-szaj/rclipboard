@@ -199,7 +199,4 @@ printf '  Platform: %s\n' "$SERVICE_PLATFORM"
 printf '  Venv:     %s\n' "$VENV_DIR"
 printf '  Bin:      %s\n' "$BIN_DIR"
 printf '  Config:   %s\n' "$CONFIG_FILE"
-case "$SERVICE_PLATFORM" in
-    systemd) printf '  Status:   systemctl --user status rclipboard.service\n' ;;
-    launchd) printf '  Status:   launchctl print gui/%s/com.rclipboard.service\n' "$USER_ID" ;;
-esac
+service_print_status_hint

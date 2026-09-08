@@ -61,6 +61,14 @@ def _make_fake_systemctl(fake_bin: Path) -> Path:
         "#!/usr/bin/env bash\n"
         "set -euo pipefail\n"
         f"printf '%s\\n' \"$*\" >> {log}\n"
+        "case \"$*\" in\n"
+        "    '--user daemon-reload') "
+        "exit \"${SYSTEMCTL_DAEMON_STATUS:-${SYSTEMCTL_STATUS:-0}}\" ;;\n"
+        "    '--user enable --now rclipboard.service') "
+        "exit \"${SYSTEMCTL_ENABLE_MAIN_STATUS:-${SYSTEMCTL_STATUS:-0}}\" ;;\n"
+        "    '--user enable --now rclipboard-display.service') "
+        "exit \"${SYSTEMCTL_ENABLE_DISPLAY_STATUS:-${SYSTEMCTL_STATUS:-0}}\" ;;\n"
+        "esac\n"
         "exit \"${SYSTEMCTL_STATUS:-0}\"\n"
     )
     stub.chmod(0o755)
@@ -112,6 +120,7 @@ def _run_systemd_adapter(
     action: str = "install",
     start_service: bool = True,
     xsel: bool = False,
+    enable_display_status: int = 0,
 ) -> subprocess.CompletedProcess[str]:
     app_dir = home / ".config" / "rclipboard"
     config_dir = app_dir
@@ -144,6 +153,7 @@ case "$8" in
     start) service_start ;;
     stop) service_stop ;;
     restart) service_restart ;;
+    status-hint) service_print_status_hint ;;
     uninstall) service_uninstall ;;
     install-conditional)
         if service_install; then
@@ -171,7 +181,11 @@ esac
             str(ROOT_DIR / "scripts/install/systemd.sh"),
             action,
         ],
-        env={**env, "HOME": str(home)},
+        env={
+            **env,
+            "HOME": str(home),
+            "SYSTEMCTL_ENABLE_DISPLAY_STATUS": str(enable_display_status),
+        },
         capture_output=True,
         text=True,
     )
@@ -208,6 +222,7 @@ case "$7" in
     start) service_start ;;
     stop) service_stop ;;
     restart) service_restart ;;
+    status-hint) service_print_status_hint ;;
     uninstall) service_uninstall ;;
     uninstall-conditional)
         if service_uninstall; then
@@ -443,6 +458,16 @@ class SystemdAdapterTests(unittest.TestCase):
             self.systemctl_log.read_text(),
         )
 
+    def test_linux_display_enable_failure_is_propagated(self) -> None:
+        result = _run_systemd_adapter(
+            self.home,
+            self.fake_bin,
+            action="start",
+            xsel=True,
+            enable_display_status=8,
+        )
+        self.assertNotEqual(result.returncode, 0)
+
     def test_linux_no_start_installs_without_enabling_services(self) -> None:
         self.systemctl_log.unlink()
         result = _run_systemd_adapter(
@@ -518,6 +543,18 @@ class SystemdAdapterTests(unittest.TestCase):
         self.assertEqual(
             self.systemctl_log.read_text(),
             "--user restart rclipboard.service\n",
+        )
+
+    def test_linux_adapter_prints_status_hint(self) -> None:
+        result = _run_systemd_adapter(
+            self.home,
+            self.fake_bin,
+            action="status-hint",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            result.stdout,
+            "  Status:   systemctl --user status rclipboard.service\n",
         )
 
     def test_linux_uninstall_removes_marked_units_and_legacy_dropin(self) -> None:
@@ -670,6 +707,19 @@ class LaunchdAdapterTests(unittest.TestCase):
             f"bootout {domain} {self.plist_path}\n",
         )
 
+    def test_macos_adapter_prints_status_hint(self) -> None:
+        result = _run_launchd_adapter(
+            self.home,
+            self.fake_bin,
+            action="status-hint",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            result.stdout,
+            f"  Status:   launchctl print gui/{os.getuid()}/"
+            "com.rclipboard.service\n",
+        )
+
     def test_macos_stop_propagates_real_bootout_error(self) -> None:
         result = _run_launchd_adapter(
             self.home,
@@ -798,6 +848,18 @@ class UnifiedInstallTests(unittest.TestCase):
             "--user enable --now rclipboard.service",
             self.systemctl_log.read_text(),
         )
+
+    def test_main_service_enable_failure_is_not_reported_as_success(self) -> None:
+        home = self.tmp_path / "start-failure-home"
+        home.mkdir()
+        result = _run_installer(
+            home,
+            self.fake_bin,
+            extra_env={"SYSTEMCTL_ENABLE_MAIN_STATUS": "9"},
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertNotIn("Installed rclipboard user service.", result.stdout)
+        self.assertIn("failed to start systemd service", result.stderr)
 
     def test_package_is_installed_from_repository(self) -> None:
         home = self.tmp_path / "package-home"

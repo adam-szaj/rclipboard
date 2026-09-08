@@ -31,12 +31,16 @@ service_install() {
 }
 
 service_start() {
-    "$SYSTEMCTL_BIN" --user enable --now rclipboard.service
+    "$SYSTEMCTL_BIN" --user enable --now rclipboard.service || return 1
     if "$APP_DIR/venv/bin/rclipboard" config env \
         --config "$CONFIG_DIR/config.toml" \
         | grep -Fqx 'RCLIPBOARD_XSEL="1"'; then
         "$SYSTEMCTL_BIN" --user enable --now rclipboard-display.service
     fi
+}
+
+service_print_status_hint() {
+    printf '  Status:   systemctl --user status rclipboard.service\n'
 }
 
 service_stop() {
