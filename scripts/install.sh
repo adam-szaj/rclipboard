@@ -101,13 +101,12 @@ if [ "$PURGE_USER_DATA" -eq 1 ] \
 fi
 
 case "$OPERATION" in
-    install) ;;
-    reset|uninstall|update)
+    install|reset|uninstall) ;;
+    update)
         die "$OPERATION is not available until its lifecycle implementation is installed"
         ;;
 esac
 
-REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 APP_DIR="$(resolve_app_dir)"
 CONFIG_DIR="$APP_DIR"
 BIN_DIR="$APP_DIR/bin"
@@ -116,6 +115,35 @@ INSTALLER_DIR="$APP_DIR/installer"
 METADATA_FILE="$APP_DIR/install.conf"
 CONFIG_FILE="$APP_DIR/config.toml"
 
+if [ "$OPERATION" = uninstall ]; then
+    validate_app_dir_for_cleanup
+    read_install_metadata "$METADATA_FILE"
+    case "$REPO_DIR" in
+        /*) ;;
+        *) die "invalid repository path in installation metadata: $REPO_DIR" ;;
+    esac
+
+    PLATFORM="${RCLIPBOARD_INSTALL_UNAME:-$(uname -s)}"
+    case "$PLATFORM" in
+        Linux) . "$INSTALL_SOURCE_DIR/install/systemd.sh" ;;
+        Darwin) . "$INSTALL_SOURCE_DIR/install/launchd.sh" ;;
+        *) die "unsupported operating system: $PLATFORM" ;;
+    esac
+
+    if [ "$PURGE_USER_DATA" -eq 1 ]; then
+        confirm_user_data_purge
+    fi
+    service_uninstall || die "failed to uninstall $SERVICE_PLATFORM service"
+    remove_managed_runtime || die "failed to remove managed runtime"
+    if [ "$PURGE_USER_DATA" -eq 1 ]; then
+        purge_user_data || die "failed to purge user data"
+    fi
+    remove_empty_app_dir
+    printf 'Uninstalled rclipboard user service.\n'
+    exit 0
+fi
+
+REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 require_python_311
 require_git_checkout
 require_single_line_value repo_dir "$REPO_DIR"
@@ -136,6 +164,18 @@ case "$PLATFORM" in
 esac
 
 service_preflight || die "service preflight failed"
+
+if [ "$OPERATION" = reset ]; then
+    validate_app_dir_for_cleanup
+    if [ "$PURGE_USER_DATA" -eq 1 ]; then
+        confirm_user_data_purge
+    fi
+    service_uninstall || die "failed to uninstall $SERVICE_PLATFORM service"
+    remove_managed_runtime || die "failed to remove managed runtime"
+    if [ "$PURGE_USER_DATA" -eq 1 ]; then
+        purge_user_data || die "failed to purge user data"
+    fi
+fi
 
 umask 077
 mkdir -p "$APP_DIR" "$BIN_DIR" "$INSTALLER_DIR"

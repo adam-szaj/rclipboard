@@ -13,12 +13,15 @@ from __future__ import annotations
 
 import os
 import plistlib
+import pty
 import re
+import select
 import shutil
 import stat
 import subprocess
 import sys
 import tempfile
+import time
 import tomllib
 import unittest
 from pathlib import Path
@@ -300,6 +303,84 @@ def _run_installer(
         capture_output=True,
         text=True,
     )
+
+
+def _installer_env(
+    home: Path,
+    fake_bin: Path,
+    *,
+    platform: str = "Linux",
+    extra_env: dict[str, str] | None = None,
+) -> dict[str, str]:
+    env = os.environ.copy()
+    env.pop("XDG_CONFIG_HOME", None)
+    env["HOME"] = str(home)
+    env["PATH"] = f"{fake_bin}:{env['PATH']}"
+    env["RCLIPBOARD_INSTALL_UNAME"] = platform
+    env["SYSTEMCTL_BIN"] = str(fake_bin / "systemctl")
+    env["LAUNCHCTL_BIN"] = str(fake_bin / "launchctl")
+    env["LAUNCHCTL_LOG"] = str(fake_bin.parent / "launchctl.log")
+    env["PYTHON_BIN"] = str(fake_bin / "python3")
+    env["RCLIPBOARD_INSTALL_SKIP_PIP"] = "1"
+    if extra_env:
+        env.update(extra_env)
+    return env
+
+
+def _run_installer_with_tty(
+    command: list[str],
+    env: dict[str, str],
+    typed: bytes,
+    *,
+    cwd: Path = ROOT_DIR,
+) -> subprocess.CompletedProcess[bytes]:
+    """Run command with a real controlling terminal and capture combined output."""
+    pid, master = pty.fork()
+    if pid == 0:
+        os.chdir(cwd)
+        os.execvpe(command[0], command, env)
+
+    output = bytearray()
+    deadline = time.monotonic() + 20
+    try:
+        if typed:
+            os.write(master, typed)
+        status: int | None = None
+        while status is None:
+            if time.monotonic() >= deadline:
+                os.kill(pid, 9)
+                os.waitpid(pid, 0)
+                raise subprocess.TimeoutExpired(command, 20, bytes(output))
+            readable, _, _ = select.select([master], [], [], 0.05)
+            if readable:
+                try:
+                    chunk = os.read(master, 4096)
+                except OSError:
+                    chunk = b""
+                if chunk:
+                    output.extend(chunk)
+            waited, child_status = os.waitpid(pid, os.WNOHANG)
+            if waited == pid:
+                status = child_status
+        while True:
+            readable, _, _ = select.select([master], [], [], 0)
+            if not readable:
+                break
+            try:
+                chunk = os.read(master, 4096)
+            except OSError:
+                break
+            if not chunk:
+                break
+            output.extend(chunk)
+        return subprocess.CompletedProcess(
+            command,
+            os.waitstatus_to_exitcode(status),
+            bytes(output),
+            b"",
+        )
+    finally:
+        os.close(master)
 
 
 def _read_metadata(path: Path) -> dict[str, str]:
@@ -1221,6 +1302,398 @@ class UnifiedInstallTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(unit.read_bytes(), original)
         self.assertFalse((home / ".config/rclipboard").exists())
+
+
+class _LifecycleTestCase(unittest.TestCase):
+    platform = "Linux"
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.tmp_path = Path(self._tmp.name)
+        self.home = self.tmp_path / "home"
+        self.fake_bin = self.tmp_path / "fake-bin"
+        self.home.mkdir()
+        self.fake_bin.mkdir()
+        self.systemctl_log = _make_fake_systemctl(self.fake_bin)
+        self.launchctl_log = _make_fake_launchctl(self.fake_bin)
+        result = _run_installer(
+            self.home,
+            self.fake_bin,
+            platform=self.platform,
+            args=["--no-start"],
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.app_dir = self.home / ".config/rclipboard"
+        self.user_data = {
+            "config.toml": b"# custom config\n",
+            "age_key.txt": b"private-key\n",
+            "age_key.pub": b"public-key\n",
+            "known_keys": b"known-key\n",
+        }
+
+    def tearDown(self) -> None:
+        self._tmp.cleanup()
+
+    def _write_user_data_sentinels(self) -> dict[Path, bytes]:
+        sentinels = {}
+        for name, content in self.user_data.items():
+            path = self.app_dir / name
+            path.write_bytes(content)
+            sentinels[path] = content
+        return sentinels
+
+    def _assert_sentinels_unchanged(self, sentinels: dict[Path, bytes]) -> None:
+        for path, content in sentinels.items():
+            with self.subTest(path=path):
+                self.assertEqual(path.read_bytes(), content)
+
+    def _env(self, extra_env: dict[str, str] | None = None) -> dict[str, str]:
+        return _installer_env(
+            self.home,
+            self.fake_bin,
+            platform=self.platform,
+            extra_env=extra_env,
+        )
+
+    def run_reset(
+        self,
+        extra: list[str] | None = None,
+        *,
+        input_text: str | None = None,
+        extra_env: dict[str, str] | None = None,
+    ) -> subprocess.CompletedProcess[str]:
+        return _run_installer(
+            self.home,
+            self.fake_bin,
+            platform=self.platform,
+            args=["--reset", "--no-start", *(extra or [])],
+            input_text=input_text,
+            extra_env=extra_env,
+        )
+
+    def run_installed(
+        self,
+        extra: list[str] | None = None,
+        *,
+        input_text: str | None = None,
+        extra_env: dict[str, str] | None = None,
+    ) -> subprocess.CompletedProcess[str]:
+        command = [
+            str(self.app_dir / "bin/rclipboard-uninstall"),
+            *(extra or []),
+        ]
+        return subprocess.run(
+            command,
+            cwd=self.tmp_path,
+            env=self._env(extra_env),
+            input=input_text,
+            capture_output=True,
+            text=True,
+        )
+
+    def run_with_tty(
+        self,
+        command: list[str],
+        typed: bytes,
+        *,
+        extra_env: dict[str, str] | None = None,
+    ) -> subprocess.CompletedProcess[bytes]:
+        return _run_installer_with_tty(
+            command,
+            self._env(extra_env),
+            typed,
+        )
+
+
+class ResetTests(_LifecycleTestCase):
+    def test_reset_preserves_user_data_unknown_files_and_recreates_runtime(self) -> None:
+        sentinels = self._write_user_data_sentinels()
+        unknown = self.app_dir / "notes.txt"
+        unknown.write_bytes(b"keep me\n")
+        old_python = self.app_dir / "venv/bin/python"
+        old_python.write_bytes(b"old runtime\n")
+
+        result = self.run_reset()
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self._assert_sentinels_unchanged(sentinels)
+        self.assertEqual(unknown.read_bytes(), b"keep me\n")
+        self.assertTrue(self.app_dir.is_dir())
+        self.assertNotEqual(old_python.read_bytes(), b"old runtime\n")
+
+    def test_purge_requires_exact_yes_and_cancels_before_any_mutation(self) -> None:
+        sentinels = self._write_user_data_sentinels()
+        runtime = self.app_dir / "venv/runtime-sentinel"
+        runtime.write_bytes(b"runtime\n")
+        service = self.home / ".config/systemd/user/rclipboard.service"
+        service_before = service.read_bytes()
+        log_before = self.systemctl_log.read_bytes()
+        command = [
+            "bash",
+            str(ROOT_DIR / "scripts/install.sh"),
+            "--reset",
+            "--purge-user-data",
+            "--no-start",
+        ]
+
+        for label, typed in {
+            "capitalized": b"Yes\n",
+            "trailing-space": b"yes \n",
+            "blank": b"\n",
+            "eof": b"\x04",
+        }.items():
+            with self.subTest(answer=label):
+                result = self.run_with_tty(command, typed)
+                self.assertNotEqual(result.returncode, 0, result.stdout)
+                self.assertIn(b"user data purge cancelled", result.stdout)
+                self._assert_sentinels_unchanged(sentinels)
+                self.assertEqual(runtime.read_bytes(), b"runtime\n")
+                self.assertEqual(service.read_bytes(), service_before)
+                self.assertEqual(self.systemctl_log.read_bytes(), log_before)
+
+    def test_piped_yes_cannot_authorize_purge(self) -> None:
+        sentinels = self._write_user_data_sentinels()
+        runtime = self.app_dir / "venv/runtime-sentinel"
+        runtime.write_bytes(b"runtime\n")
+        log_before = self.systemctl_log.read_bytes()
+
+        result = self.run_reset(["--purge-user-data"], input_text="yes\n")
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("requires an interactive terminal", result.stderr)
+        self._assert_sentinels_unchanged(sentinels)
+        self.assertEqual(runtime.read_bytes(), b"runtime\n")
+        self.assertEqual(self.systemctl_log.read_bytes(), log_before)
+
+    def test_confirm_lists_every_existing_target_before_exact_yes(self) -> None:
+        sentinels = self._write_user_data_sentinels()
+        command = [
+            "bash",
+            str(ROOT_DIR / "scripts/install.sh"),
+            "--reset",
+            "--purge-user-data",
+            "--no-start",
+        ]
+
+        result = self.run_with_tty(command, b"no\n")
+
+        self.assertNotEqual(result.returncode, 0)
+        output = result.stdout.decode(errors="replace")
+        lines = output.splitlines()
+        prompt_offset = output.index("Type yes to continue:")
+        for path in sentinels:
+            self.assertIn(str(path), lines)
+            self.assertLess(output.index(str(path)), prompt_offset)
+
+    def test_exact_yes_purges_then_creates_only_fresh_config(self) -> None:
+        self._write_user_data_sentinels()
+        unknown = self.app_dir / "keep.txt"
+        unknown.write_bytes(b"unknown\n")
+        command = [
+            "bash",
+            str(ROOT_DIR / "scripts/install.sh"),
+            "--reset",
+            "--purge-user-data",
+            "--no-start",
+        ]
+
+        result = self.run_with_tty(command, b"yes\n")
+
+        self.assertEqual(result.returncode, 0, result.stdout)
+        with (self.app_dir / "config.toml").open("rb") as file:
+            config = tomllib.load(file)
+        self.assertEqual(config["client"]["transport"], "uds")
+        for name in ("age_key.txt", "age_key.pub", "known_keys"):
+            self.assertFalse((self.app_dir / name).exists())
+        self.assertEqual(unknown.read_bytes(), b"unknown\n")
+
+    def test_reset_rejects_unmanaged_service_before_runtime_mutation(self) -> None:
+        service = self.home / ".config/systemd/user/rclipboard.service"
+        service.write_bytes(b"user-owned\n")
+        runtime = self.app_dir / "venv/runtime-sentinel"
+        runtime.write_bytes(b"runtime\n")
+        log_before = self.systemctl_log.read_bytes()
+
+        result = self.run_reset()
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("refusing to overwrite unmanaged file", result.stderr)
+        self.assertEqual(service.read_bytes(), b"user-owned\n")
+        self.assertEqual(runtime.read_bytes(), b"runtime\n")
+        self.assertEqual(self.systemctl_log.read_bytes(), log_before)
+
+    def test_service_cleanup_failure_prevents_runtime_removal(self) -> None:
+        runtime = self.app_dir / "venv/runtime-sentinel"
+        runtime.write_bytes(b"runtime\n")
+
+        result = self.run_reset(extra_env={"SYSTEMCTL_STATUS": "7"})
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("failed to uninstall systemd service", result.stderr)
+        self.assertEqual(runtime.read_bytes(), b"runtime\n")
+
+
+class UninstallTests(_LifecycleTestCase):
+    def test_uninstall_preserves_user_data_unknown_files_and_removes_runtime(self) -> None:
+        sentinels = self._write_user_data_sentinels()
+        unknown_app = self.app_dir / "notes.txt"
+        unknown_bin = self.app_dir / "bin/user-command"
+        unknown_installer = self.app_dir / "installer/user-note"
+        unknown_app.write_bytes(b"app\n")
+        unknown_bin.write_bytes(b"bin\n")
+        unknown_installer.write_bytes(b"installer\n")
+        service = self.home / ".config/systemd/user/rclipboard.service"
+
+        result = self.run_installed()
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self._assert_sentinels_unchanged(sentinels)
+        self.assertFalse((self.app_dir / "venv").exists())
+        self.assertFalse((self.app_dir / "install.conf").exists())
+        self.assertFalse(service.exists())
+        self.assertFalse((self.app_dir / "bin/rclipboard-uninstall").exists())
+        self.assertEqual(unknown_app.read_bytes(), b"app\n")
+        self.assertEqual(unknown_bin.read_bytes(), b"bin\n")
+        self.assertEqual(unknown_installer.read_bytes(), b"installer\n")
+        self.assertTrue(self.app_dir.is_dir())
+
+    def test_exact_yes_purges_user_data_and_self_removes_installed_payload(self) -> None:
+        self._write_user_data_sentinels()
+        wrapper = self.app_dir / "bin/rclipboard-uninstall"
+        installed_script = self.app_dir / "installer/install.sh"
+        command = [str(wrapper), "--purge-user-data"]
+
+        result = self.run_with_tty(command, b"yes\n")
+
+        self.assertEqual(result.returncode, 0, result.stdout)
+        for name in self.user_data:
+            self.assertFalse((self.app_dir / name).exists())
+        self.assertFalse(wrapper.exists())
+        self.assertFalse(installed_script.exists())
+        self.assertFalse(self.app_dir.exists())
+
+    def test_uninstall_does_not_require_recorded_checkout_to_exist(self) -> None:
+        metadata = self.app_dir / "install.conf"
+        metadata.write_text(
+            "repo_dir=/checkout/that/no-longer-exists\n"
+            "remote=origin\n"
+            "branch=main\n"
+        )
+
+        result = self.run_installed()
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse((self.app_dir / "venv").exists())
+
+    def test_invalid_metadata_cancels_before_service_or_runtime_mutation(self) -> None:
+        (self.app_dir / "install.conf").write_text("remote=origin\n")
+        runtime = self.app_dir / "venv/runtime-sentinel"
+        runtime.write_bytes(b"runtime\n")
+        log_before = self.systemctl_log.read_bytes()
+
+        result = self.run_installed()
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("missing metadata key", result.stderr)
+        self.assertEqual(runtime.read_bytes(), b"runtime\n")
+        self.assertEqual(self.systemctl_log.read_bytes(), log_before)
+
+    def test_uninstall_keeps_unmarked_service_definition(self) -> None:
+        service = self.home / ".config/systemd/user/rclipboard.service"
+        service.write_bytes(b"user-owned\n")
+
+        result = self.run_installed()
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(service.read_bytes(), b"user-owned\n")
+
+    def test_linux_service_cleanup_failure_prevents_runtime_removal(self) -> None:
+        runtime = self.app_dir / "venv/runtime-sentinel"
+        runtime.write_bytes(b"runtime\n")
+
+        result = self.run_installed(extra_env={"SYSTEMCTL_STATUS": "7"})
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("failed to uninstall systemd service", result.stderr)
+        self.assertEqual(runtime.read_bytes(), b"runtime\n")
+
+    def test_cleanup_rejects_unsafe_application_paths(self) -> None:
+        for app_dir in ("", "/", str(self.home), "/tmp/not-rclipboard"):
+            with self.subTest(app_dir=app_dir):
+                result = subprocess.run(
+                    [
+                        "bash",
+                        "-c",
+                        '. "$1"; APP_DIR="$2"; '
+                        'VENV_DIR="$APP_DIR/venv"; '
+                        'INSTALLER_DIR="$APP_DIR/installer"; '
+                        "validate_app_dir_for_cleanup",
+                        "cleanup-test",
+                        str(ROOT_DIR / "scripts/install/common.sh"),
+                        app_dir,
+                    ],
+                    env={**os.environ, "HOME": str(self.home)},
+                    capture_output=True,
+                    text=True,
+                )
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("unsafe application directory", result.stderr)
+
+    def test_cleanup_rejects_mismatched_managed_paths(self) -> None:
+        cases = {
+            "bin": ("BIN_DIR", "/tmp/not-the-app-bin"),
+            "venv": ("VENV_DIR", "/tmp/not-the-app-venv"),
+            "installer": ("INSTALLER_DIR", "/tmp/not-the-app-installer"),
+            "metadata": ("METADATA_FILE", "/tmp/not-the-app-metadata"),
+        }
+        for name, (variable, value) in cases.items():
+            with self.subTest(path=name):
+                assignments = (
+                    f'APP_DIR="{self.app_dir}"; '
+                    'BIN_DIR="$APP_DIR/bin"; '
+                    'VENV_DIR="$APP_DIR/venv"; '
+                    'INSTALLER_DIR="$APP_DIR/installer"; '
+                    'METADATA_FILE="$APP_DIR/install.conf"; '
+                    f'{variable}="$2"; '
+                )
+                result = subprocess.run(
+                    [
+                        "bash",
+                        "-c",
+                        f'. "$1"; {assignments} validate_app_dir_for_cleanup',
+                        "cleanup-test",
+                        str(ROOT_DIR / "scripts/install/common.sh"),
+                        value,
+                    ],
+                    env={**os.environ, "HOME": str(self.home)},
+                    capture_output=True,
+                    text=True,
+                )
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("unsafe", result.stderr)
+
+
+class DarwinUninstallTests(_LifecycleTestCase):
+    platform = "Darwin"
+
+    def test_launchd_cleanup_failure_prevents_runtime_removal(self) -> None:
+        runtime = self.app_dir / "venv/runtime-sentinel"
+        runtime.write_bytes(b"runtime\n")
+
+        result = self.run_installed(extra_env={"LAUNCHCTL_BOOTOUT_STATUS": "5"})
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("failed to uninstall launchd service", result.stderr)
+        self.assertEqual(runtime.read_bytes(), b"runtime\n")
+
+    def test_uninstall_keeps_unmarked_launch_agent(self) -> None:
+        plist = self.home / "Library/LaunchAgents/com.rclipboard.service.plist"
+        plist.write_bytes(b"user-owned plist\n")
+
+        result = self.run_installed()
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(plist.read_bytes(), b"user-owned plist\n")
 
 
 class InstallerLayoutTests(unittest.TestCase):

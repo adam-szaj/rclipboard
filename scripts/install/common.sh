@@ -17,6 +17,11 @@ systemd/user/rclipboard-display.service
 launchd/com.rclipboard.service.plist.in
 config/rclipboard.conf.example'
 
+USER_DATA_FILES='config.toml
+age_key.txt
+age_key.pub
+known_keys'
+
 die() {
     printf 'error: %s\n' "$*" >&2
     exit 1
@@ -184,6 +189,89 @@ install_installer_payload() {
     done <<EOF
 $INSTALLER_FILES
 EOF
+}
+
+validate_app_dir_for_cleanup() {
+    [ -n "${APP_DIR:-}" ] || die "unsafe application directory: empty path"
+    case "$APP_DIR" in
+        /*/rclipboard) ;;
+        *) die "unsafe application directory: $APP_DIR" ;;
+    esac
+    [ "$APP_DIR" != / ] || die "unsafe application directory: $APP_DIR"
+    [ "$APP_DIR" != "$HOME" ] || die "unsafe application directory: $APP_DIR"
+    [ "${BIN_DIR:-}" = "$APP_DIR/bin" ] \
+        || die "unsafe public command directory: ${BIN_DIR:-}"
+    [ "${VENV_DIR:-}" = "$APP_DIR/venv" ] \
+        || die "unsafe virtual environment directory: ${VENV_DIR:-}"
+    [ "${INSTALLER_DIR:-}" = "$APP_DIR/installer" ] \
+        || die "unsafe installer directory: ${INSTALLER_DIR:-}"
+    [ "${METADATA_FILE:-}" = "$APP_DIR/install.conf" ] \
+        || die "unsafe installation metadata path: ${METADATA_FILE:-}"
+}
+
+print_existing_user_data_paths() {
+    local name path
+
+    while IFS= read -r name; do
+        path="$APP_DIR/$name"
+        if [ -e "$path" ] || [ -L "$path" ]; then
+            printf '%s\n' "$path"
+        fi
+    done <<EOF
+$USER_DATA_FILES
+EOF
+}
+
+confirm_user_data_purge() {
+    [ -t 0 ] && [ -r /dev/tty ] && [ -w /dev/tty ] || die \
+        "purging configuration and keys requires an interactive terminal"
+    printf '%s\n' "The following user data will be deleted:" >&2
+    print_existing_user_data_paths >&2
+    printf '%s' 'Type yes to continue: ' >/dev/tty
+    IFS= read -r answer </dev/tty || die "user data purge cancelled"
+    [ "$answer" = yes ] || die "user data purge cancelled"
+}
+
+purge_user_data() {
+    local name
+
+    validate_app_dir_for_cleanup
+    while IFS= read -r name; do
+        rm -f "$APP_DIR/$name" || return 1
+    done <<EOF
+$USER_DATA_FILES
+EOF
+}
+
+remove_managed_runtime() {
+    local name relative
+
+    validate_app_dir_for_cleanup
+    rm -rf "$VENV_DIR" || return 1
+    while IFS= read -r name; do
+        rm -f "$BIN_DIR/$name" || return 1
+    done <<EOF
+$PUBLIC_SCRIPTS
+EOF
+    while IFS= read -r relative; do
+        rm -f "$INSTALLER_DIR/$relative" || return 1
+    done <<EOF
+$INSTALLER_FILES
+EOF
+    rm -f "$METADATA_FILE" || return 1
+
+    rmdir "$INSTALLER_DIR/systemd/user" 2>/dev/null || true
+    rmdir "$INSTALLER_DIR/systemd" 2>/dev/null || true
+    rmdir "$INSTALLER_DIR/launchd" 2>/dev/null || true
+    rmdir "$INSTALLER_DIR/config" 2>/dev/null || true
+    rmdir "$INSTALLER_DIR/install" 2>/dev/null || true
+    rmdir "$INSTALLER_DIR" 2>/dev/null || true
+    rmdir "$BIN_DIR" 2>/dev/null || true
+}
+
+remove_empty_app_dir() {
+    validate_app_dir_for_cleanup
+    rmdir "$APP_DIR" 2>/dev/null || true
 }
 
 managed_file_has_marker() {
