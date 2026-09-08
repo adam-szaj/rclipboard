@@ -71,14 +71,29 @@ require_git_target() {
     fi
 }
 
-require_update_checkout() {
-    local checked_out status
+canonicalize_recorded_checkout() {
+    local physical_repo git_root physical_root
 
     case "$REPO_DIR" in
         /*) ;;
         *) die "recorded source checkout must be an absolute path: $REPO_DIR" ;;
     esac
+    physical_repo=$(cd "$REPO_DIR" 2>/dev/null && pwd -P) \
+        || die "cannot resolve recorded source checkout: $REPO_DIR"
+    git_root=$(git -C "$physical_repo" rev-parse --show-toplevel 2>/dev/null) \
+        || die "source directory is not a Git checkout: $REPO_DIR"
+    physical_root=$(cd "$git_root" 2>/dev/null && pwd -P) \
+        || die "cannot resolve Git repository root: $git_root"
+    [ "$physical_repo" = "$physical_root" ] \
+        || die "recorded source checkout must name the Git repository root"
+    REPO_DIR="$physical_root"
     require_git_checkout
+}
+
+require_update_checkout() {
+    local checked_out status
+
+    canonicalize_recorded_checkout
     require_single_line_value remote "$REMOTE"
     require_single_line_value branch "$BRANCH"
     git -C "$REPO_DIR" remote get-url -- "$REMOTE" >/dev/null 2>&1 \
@@ -97,12 +112,13 @@ require_update_checkout() {
 }
 
 perform_update() {
-    local remote_ref
+    local remote_ref fetch_refspec
 
     require_update_checkout
-    git -C "$REPO_DIR" fetch -- "$REMOTE" "$BRANCH" \
-        || die "failed to fetch $REMOTE branch $BRANCH"
     remote_ref="refs/remotes/$REMOTE/$BRANCH"
+    fetch_refspec="+refs/heads/$BRANCH:$remote_ref"
+    git -C "$REPO_DIR" fetch -- "$REMOTE" "$fetch_refspec" \
+        || die "failed to fetch $REMOTE branch $BRANCH"
     git -C "$REPO_DIR" rev-parse --verify "$remote_ref^{commit}" \
         >/dev/null 2>&1 \
         || die "fetched branch is unavailable: $REMOTE/$BRANCH"

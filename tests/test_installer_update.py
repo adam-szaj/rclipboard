@@ -231,11 +231,31 @@ class InstallerUpdateTests(unittest.TestCase):
         for name, content in user_data.items():
             self.assertEqual((self.app_dir / name).read_bytes(), content)
         trace_text = trace.read_text()
-        self.assertIn("fetch -- origin main", trace_text)
+        self.assertIn(
+            "fetch -- origin +refs/heads/main:refs/remotes/origin/main",
+            trace_text,
+        )
         self.assertIn("merge --ff-only", trace_text)
         self.assertIsNone(
             re.search(r"(?:^|[ /])(?:stash|checkout|switch|rebase|reset)(?: |$)", trace_text),
             trace_text,
+        )
+
+    def test_update_refreshes_selected_ref_without_remote_fetch_config(self) -> None:
+        _git("config", "--unset-all", "remote.origin.fetch", cwd=self.checkout)
+        expected_head = self._push_marker("explicit-fetch-refspec")
+
+        result = self._run_update()
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(_git("rev-parse", "HEAD", cwd=self.checkout), expected_head)
+        self.assertIn(
+            "# explicit-fetch-refspec",
+            (self.app_dir / "installer/install.sh").read_text(),
+        )
+        self.assertIn(
+            "--user restart rclipboard.service",
+            self.systemctl_log.read_text(),
         )
 
     def test_untracked_file_is_rejected_before_mutation(self) -> None:
@@ -245,6 +265,15 @@ class InstallerUpdateTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("clean worktree", result.stderr)
         self._assert_unchanged(before)
+
+    def test_public_update_rejects_install_only_options(self) -> None:
+        before = self._before()
+        for arguments in (("--transport", "tcp"), ("--no-start",)):
+            with self.subTest(arguments=arguments):
+                result = self._run_update(*arguments)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("update accepts only", result.stderr)
+                self._assert_unchanged(before)
 
     def test_tracked_modification_is_rejected_before_mutation(self) -> None:
         readme = self.checkout / "README.md"
@@ -269,6 +298,19 @@ class InstallerUpdateTests(unittest.TestCase):
         result = self._run_update()
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("branch main", result.stderr)
+        self._assert_unchanged(before)
+
+    def test_recorded_repository_subdirectory_is_rejected_before_mutation(self) -> None:
+        metadata = self.app_dir / "install.conf"
+        metadata.write_text(
+            f"repo_dir={self.checkout / 'scripts'}\nremote=origin\nbranch=main\n"
+        )
+        before = self._before()
+
+        result = self._run_update()
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("repository root", result.stderr)
         self._assert_unchanged(before)
 
     def test_missing_remote_is_rejected_before_mutation(self) -> None:
@@ -362,7 +404,10 @@ class InstallerUpdateTests(unittest.TestCase):
 
         self.assertEqual(second.returncode, 0, second.stderr)
         self.assertEqual(_git("rev-parse", "HEAD", cwd=self.checkout), second_head)
-        self.assertIn("fetch -- mirror stable", trace.read_text())
+        self.assertIn(
+            "fetch -- mirror +refs/heads/stable:refs/remotes/mirror/stable",
+            trace.read_text(),
+        )
 
     def test_failed_explicit_target_does_not_replace_recorded_values(self) -> None:
         self._configure_mirror_stable()
@@ -398,6 +443,45 @@ class InstallerUpdateTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("recorded source checkout", result.stderr)
         self.assertEqual(self.systemctl_log.read_bytes(), log_before)
+
+    def test_internal_refresh_accepts_equivalent_parent_path(self) -> None:
+        metadata = self.app_dir / "install.conf"
+        metadata.write_text(
+            f"repo_dir={self.checkout / 'scripts' / '..'}\n"
+            "remote=origin\nbranch=main\n"
+        )
+
+        result = self._run_source_installer(
+            "--internal-refresh", "--remote", "origin", "--branch", "main"
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            _read_metadata(metadata)["repo_dir"],
+            str(self.checkout.resolve()),
+        )
+        self.assertIn(
+            "--user restart rclipboard.service",
+            self.systemctl_log.read_text(),
+        )
+
+    def test_internal_refresh_accepts_symlink_to_same_repository_root(self) -> None:
+        checkout_link = self.root / "checkout-link"
+        checkout_link.symlink_to(self.checkout, target_is_directory=True)
+        metadata = self.app_dir / "install.conf"
+        metadata.write_text(
+            f"repo_dir={checkout_link}\nremote=origin\nbranch=main\n"
+        )
+
+        result = self._run_source_installer(
+            "--internal-refresh", "--remote", "origin", "--branch", "main"
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            _read_metadata(metadata)["repo_dir"],
+            str(self.checkout.resolve()),
+        )
 
 
 if __name__ == "__main__":

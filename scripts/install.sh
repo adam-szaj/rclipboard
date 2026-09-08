@@ -11,7 +11,9 @@ BRANCH=""
 REMOTE_WAS_SET=0
 BRANCH_WAS_SET=0
 TRANSPORT=uds
+TRANSPORT_WAS_SET=0
 START_SERVICE=1
+NO_START_WAS_SET=0
 PURGE_USER_DATA=0
 OPERATION=install
 PYTHON_BIN="${PYTHON_BIN:-python3}"
@@ -58,10 +60,12 @@ while [ "$#" -gt 0 ]; do
         --transport)
             require_option_value "$1" "$#"
             TRANSPORT="$2"
+            TRANSPORT_WAS_SET=1
             shift 2
             ;;
         --no-start)
             START_SERVICE=0
+            NO_START_WAS_SET=1
             shift
             ;;
         --reset)
@@ -99,6 +103,14 @@ while [ "$#" -gt 0 ]; do
         *) die "unknown argument: $1" ;;
     esac
 done
+
+if [ "$OPERATION" = update ]; then
+    if [ "$TRANSPORT_WAS_SET" -eq 1 ] \
+        || [ "$NO_START_WAS_SET" -eq 1 ] \
+        || [ "$PURGE_USER_DATA" -eq 1 ]; then
+        die "update accepts only --remote, --branch, and --help"
+    fi
+fi
 
 case "$TRANSPORT" in
     uds|tcp) ;;
@@ -171,8 +183,9 @@ if [ "$OPERATION" = internal-refresh ]; then
     requested_branch="$BRANCH"
     validate_app_dir_for_cleanup
     read_install_metadata "$METADATA_FILE"
-    RECORDED_REPO_DIR="$REPO_DIR"
-    [ "$RECORDED_REPO_DIR" = "$SOURCE_REPO_DIR" ] \
+    canonicalize_recorded_checkout
+    RECORDED_REPO_ROOT="$REPO_DIR"
+    [ "$RECORDED_REPO_ROOT" = "$SOURCE_REPO_DIR" ] \
         || die "internal refresh does not match the recorded source checkout"
     if [ "$REMOTE_WAS_SET" -eq 1 ]; then
         REMOTE="$requested_remote"
