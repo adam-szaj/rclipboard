@@ -192,6 +192,8 @@ EOF
 }
 
 validate_app_dir_for_cleanup() {
+    local app_parent expected_app physical_app physical_parent
+
     [ -n "${APP_DIR:-}" ] || die "unsafe application directory: empty path"
     case "$APP_DIR" in
         /*/rclipboard) ;;
@@ -207,6 +209,51 @@ validate_app_dir_for_cleanup() {
         || die "unsafe installer directory: ${INSTALLER_DIR:-}"
     [ "${METADATA_FILE:-}" = "$APP_DIR/install.conf" ] \
         || die "unsafe installation metadata path: ${METADATA_FILE:-}"
+
+    [ ! -L "$APP_DIR" ] || die \
+        "unsafe application directory symlink: $APP_DIR"
+    if [ -e "$APP_DIR" ]; then
+        [ -d "$APP_DIR" ] || die \
+            "unsafe application directory type: $APP_DIR"
+        app_parent="${APP_DIR%/*}"
+        [ -n "$app_parent" ] || app_parent=/
+        physical_parent=$(cd "$app_parent" 2>/dev/null && pwd -P) \
+            || die "cannot resolve application parent: $app_parent"
+        physical_app=$(cd "$APP_DIR" 2>/dev/null && pwd -P) \
+            || die "cannot resolve application directory: $APP_DIR"
+        expected_app="$physical_parent/rclipboard"
+        [ "$physical_parent" != / ] || expected_app=/rclipboard
+        [ "$physical_app" = "$expected_app" ] || die \
+            "unsafe physical application directory: $APP_DIR"
+
+        validate_managed_directory "$BIN_DIR" "$physical_app/bin"
+        validate_managed_directory "$VENV_DIR" "$physical_app/venv"
+        validate_managed_directory "$INSTALLER_DIR" "$physical_app/installer"
+        validate_managed_directory \
+            "$INSTALLER_DIR/install" "$physical_app/installer/install"
+        validate_managed_directory \
+            "$INSTALLER_DIR/systemd" "$physical_app/installer/systemd"
+        validate_managed_directory \
+            "$INSTALLER_DIR/systemd/user" \
+            "$physical_app/installer/systemd/user"
+        validate_managed_directory \
+            "$INSTALLER_DIR/launchd" "$physical_app/installer/launchd"
+        validate_managed_directory \
+            "$INSTALLER_DIR/config" "$physical_app/installer/config"
+    fi
+}
+
+validate_managed_directory() {
+    local path="$1" expected_physical="$2" physical
+
+    [ ! -L "$path" ] || die "unsafe managed directory symlink: $path"
+    if [ -e "$path" ]; then
+        [ -d "$path" ] || die "unsafe managed directory type: $path"
+        physical=$(cd "$path" 2>/dev/null && pwd -P) \
+            || die "cannot resolve managed directory: $path"
+        [ "$physical" = "$expected_physical" ] || die \
+            "unsafe managed directory location: $path"
+    fi
 }
 
 print_existing_user_data_paths() {

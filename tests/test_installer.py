@@ -67,6 +67,10 @@ def _make_fake_systemctl(fake_bin: Path) -> Path:
         "case \"$*\" in\n"
         "    '--user daemon-reload') "
         "exit \"${SYSTEMCTL_DAEMON_STATUS:-${SYSTEMCTL_STATUS:-0}}\" ;;\n"
+        "    '--user disable --now rclipboard.service') "
+        "exit \"${SYSTEMCTL_DISABLE_MAIN_STATUS:-${SYSTEMCTL_STATUS:-0}}\" ;;\n"
+        "    '--user disable --now rclipboard-display.service') "
+        "exit \"${SYSTEMCTL_DISABLE_DISPLAY_STATUS:-${SYSTEMCTL_STATUS:-0}}\" ;;\n"
         "    '--user enable --now rclipboard.service') "
         "exit \"${SYSTEMCTL_ENABLE_MAIN_STATUS:-${SYSTEMCTL_STATUS:-0}}\" ;;\n"
         "    '--user enable --now rclipboard-display.service') "
@@ -116,6 +120,21 @@ def _make_fake_python(fake_bin: Path) -> Path:
     return stub
 
 
+def _make_failing_rm(fake_bin: Path, rejected_path: Path) -> None:
+    real_rm = shutil.which("rm")
+    if real_rm is None:
+        raise AssertionError("rm is required for installer tests")
+    stub = fake_bin / "rm"
+    stub.write_text(
+        "#!/usr/bin/env bash\n"
+        "for argument in \"$@\"; do\n"
+        f"    [ \"$argument\" != {str(rejected_path)!r} ] || exit 23\n"
+        "done\n"
+        f'exec "{real_rm}" "$@"\n'
+    )
+    stub.chmod(0o755)
+
+
 def _run_systemd_adapter(
     home: Path,
     fake_bin: Path,
@@ -124,6 +143,9 @@ def _run_systemd_adapter(
     start_service: bool = True,
     xsel: bool = False,
     enable_display_status: int = 0,
+    disable_main_status: int = 0,
+    disable_display_status: int = 0,
+    daemon_status: int = 0,
 ) -> subprocess.CompletedProcess[str]:
     app_dir = home / ".config" / "rclipboard"
     config_dir = app_dir
@@ -158,6 +180,13 @@ case "$8" in
     restart) service_restart ;;
     status-hint) service_print_status_hint ;;
     uninstall) service_uninstall ;;
+    uninstall-conditional)
+        if service_uninstall; then
+            exit 0
+        else
+            exit $?
+        fi
+        ;;
     install-conditional)
         if service_install; then
             exit 0
@@ -187,7 +216,11 @@ esac
         env={
             **env,
             "HOME": str(home),
+            "PATH": f"{fake_bin}:{env['PATH']}",
             "SYSTEMCTL_ENABLE_DISPLAY_STATUS": str(enable_display_status),
+            "SYSTEMCTL_DISABLE_MAIN_STATUS": str(disable_main_status),
+            "SYSTEMCTL_DISABLE_DISPLAY_STATUS": str(disable_display_status),
+            "SYSTEMCTL_DAEMON_STATUS": str(daemon_status),
         },
         capture_output=True,
         text=True,
@@ -660,9 +693,75 @@ class SystemdAdapterTests(unittest.TestCase):
         unit = self.unit_dir / "rclipboard.service"
         original = b"[Unit]\nDescription=user-owned\n"
         unit.write_bytes(original)
+        self.systemctl_log.unlink()
         result = _run_systemd_adapter(self.home, self.fake_bin, action="uninstall")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(unit.read_bytes(), original)
+        log = self.systemctl_log.read_text()
+        self.assertNotIn("disable --now rclipboard.service", log)
+        self.assertIn("disable --now rclipboard-display.service", log)
+
+    def test_linux_uninstall_does_not_disable_unmarked_display_unit(self) -> None:
+        display = self.unit_dir / "rclipboard-display.service"
+        original = b"[Unit]\nDescription=user-owned display\n"
+        display.write_bytes(original)
+        self.systemctl_log.unlink()
+
+        result = _run_systemd_adapter(self.home, self.fake_bin, action="uninstall")
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(display.read_bytes(), original)
+        log = self.systemctl_log.read_text()
+        self.assertNotIn("disable --now rclipboard-display.service", log)
+        self.assertIn("disable --now rclipboard.service", log)
+
+    def test_linux_uninstall_does_nothing_when_both_units_are_unmarked(self) -> None:
+        main = self.unit_dir / "rclipboard.service"
+        display = self.unit_dir / "rclipboard-display.service"
+        main.write_bytes(b"user main\n")
+        display.write_bytes(b"user display\n")
+        self.systemctl_log.unlink()
+
+        result = _run_systemd_adapter(self.home, self.fake_bin, action="uninstall")
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(self.systemctl_log.exists())
+
+    def test_linux_uninstall_propagates_main_disable_failure(self) -> None:
+        display = self.unit_dir / "rclipboard-display.service"
+        display.write_bytes(b"user-owned display\n")
+        self.systemctl_log.unlink()
+
+        result = _run_systemd_adapter(
+            self.home,
+            self.fake_bin,
+            action="uninstall-conditional",
+            disable_main_status=19,
+            daemon_status=0,
+        )
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertTrue((self.unit_dir / "rclipboard.service").exists())
+        log = self.systemctl_log.read_text()
+        self.assertIn("disable --now rclipboard.service", log)
+        self.assertNotIn("daemon-reload", log)
+
+    def test_linux_uninstall_propagates_marked_file_remove_failure(self) -> None:
+        self.systemctl_log.unlink()
+        display = self.unit_dir / "rclipboard-display.service"
+        _make_failing_rm(self.fake_bin, display)
+        result = _run_systemd_adapter(
+            self.home,
+            self.fake_bin,
+            action="uninstall-conditional",
+            daemon_status=0,
+        )
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertTrue(display.exists())
+        log = self.systemctl_log.read_text()
+        self.assertIn("disable --now rclipboard-display.service", log)
+        self.assertNotIn("daemon-reload", log)
 
 
 class LaunchdAdapterTests(unittest.TestCase):
@@ -824,13 +923,14 @@ class LaunchdAdapterTests(unittest.TestCase):
         result = _run_launchd_adapter(
             self.home,
             self.fake_bin,
-            action="uninstall",
+            action="uninstall-conditional",
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertFalse(self.plist_path.exists())
 
         original = b"user-owned plist\n"
         self.plist_path.write_bytes(original)
+        self.launchctl_log.unlink(missing_ok=True)
         result = _run_launchd_adapter(
             self.home,
             self.fake_bin,
@@ -838,6 +938,7 @@ class LaunchdAdapterTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.plist_path.read_bytes(), original)
+        self.assertFalse(self.launchctl_log.exists())
 
 
 class UnifiedInstallTests(unittest.TestCase):
@@ -1534,6 +1635,37 @@ class ResetTests(_LifecycleTestCase):
 
 
 class UninstallTests(_LifecycleTestCase):
+    def _run_common_cleanup(self, app_dir: Path) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [
+                "bash",
+                "-c",
+                '. "$1"; APP_DIR="$2"; BIN_DIR="$APP_DIR/bin"; '
+                'VENV_DIR="$APP_DIR/venv"; '
+                'INSTALLER_DIR="$APP_DIR/installer"; '
+                'METADATA_FILE="$APP_DIR/install.conf"; '
+                "remove_managed_runtime",
+                "cleanup-test",
+                str(ROOT_DIR / "scripts/install/common.sh"),
+                str(app_dir),
+            ],
+            env={**os.environ, "HOME": str(self.home)},
+            capture_output=True,
+            text=True,
+        )
+
+    def _write_cleanup_baseline(self, app_dir: Path) -> dict[Path, bytes]:
+        sentinels = {
+            app_dir / "venv/runtime-sentinel": b"runtime\n",
+            app_dir / "bin/rclipctl": b"command\n",
+            app_dir / "installer/install.sh": b"installer\n",
+            app_dir / "install.conf": b"metadata\n",
+        }
+        for path, content in sentinels.items():
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(content)
+        return sentinels
+
     def test_uninstall_preserves_user_data_unknown_files_and_removes_runtime(self) -> None:
         sentinels = self._write_user_data_sentinels()
         unknown_app = self.app_dir / "notes.txt"
@@ -1601,20 +1733,57 @@ class UninstallTests(_LifecycleTestCase):
     def test_uninstall_keeps_unmarked_service_definition(self) -> None:
         service = self.home / ".config/systemd/user/rclipboard.service"
         service.write_bytes(b"user-owned\n")
+        self.systemctl_log.unlink()
 
         result = self.run_installed()
 
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(service.read_bytes(), b"user-owned\n")
+        log = self.systemctl_log.read_text()
+        self.assertNotIn("disable --now rclipboard.service", log)
+        self.assertIn("disable --now rclipboard-display.service", log)
 
-    def test_linux_service_cleanup_failure_prevents_runtime_removal(self) -> None:
+    def test_linux_daemon_reload_failure_prevents_runtime_removal(self) -> None:
         runtime = self.app_dir / "venv/runtime-sentinel"
         runtime.write_bytes(b"runtime\n")
 
-        result = self.run_installed(extra_env={"SYSTEMCTL_STATUS": "7"})
+        result = self.run_installed(extra_env={"SYSTEMCTL_DAEMON_STATUS": "7"})
 
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("failed to uninstall systemd service", result.stderr)
+        self.assertEqual(runtime.read_bytes(), b"runtime\n")
+
+    def test_linux_main_disable_failure_prevents_runtime_removal(self) -> None:
+        display = self.home / ".config/systemd/user/rclipboard-display.service"
+        display.write_bytes(b"user-owned display\n")
+        runtime = self.app_dir / "venv/runtime-sentinel"
+        runtime.write_bytes(b"runtime\n")
+
+        result = self.run_installed(
+            extra_env={
+                "SYSTEMCTL_DISABLE_MAIN_STATUS": "19",
+                "SYSTEMCTL_DAEMON_STATUS": "0",
+            }
+        )
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertNotIn("Uninstalled rclipboard", result.stdout)
+        self.assertEqual(runtime.read_bytes(), b"runtime\n")
+
+    def test_linux_unit_remove_failure_prevents_runtime_removal(self) -> None:
+        unit_dir = self.home / ".config/systemd/user"
+        runtime = self.app_dir / "venv/runtime-sentinel"
+        runtime.write_bytes(b"runtime\n")
+        _make_failing_rm(
+            self.fake_bin,
+            unit_dir / "rclipboard-display.service",
+        )
+        result = self.run_installed(
+            extra_env={"SYSTEMCTL_DAEMON_STATUS": "0"}
+        )
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertNotIn("Uninstalled rclipboard", result.stdout)
         self.assertEqual(runtime.read_bytes(), b"runtime\n")
 
     def test_cleanup_rejects_unsafe_application_paths(self) -> None:
@@ -1672,6 +1841,78 @@ class UninstallTests(_LifecycleTestCase):
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn("unsafe", result.stderr)
 
+    def test_cleanup_rejects_symlinked_app_or_managed_directory_before_mutation(
+        self,
+    ) -> None:
+        for kind in ("app", "bin", "installer"):
+            with self.subTest(kind=kind):
+                case_root = self.tmp_path / f"symlink-{kind}"
+                app_dir = case_root / "config/rclipboard"
+                external = case_root / "external"
+                external.mkdir(parents=True)
+                if kind == "app":
+                    external_app = external / "target"
+                    sentinels = self._write_cleanup_baseline(external_app)
+                    app_dir.parent.mkdir(parents=True)
+                    app_dir.symlink_to(external_app, target_is_directory=True)
+                else:
+                    sentinels = self._write_cleanup_baseline(app_dir)
+                    managed = app_dir / kind
+                    shutil.rmtree(managed)
+                    sentinels = {
+                        path: content
+                        for path, content in sentinels.items()
+                        if managed not in path.parents
+                    }
+                    external_managed = external / kind
+                    external_managed.mkdir()
+                    managed.symlink_to(external_managed, target_is_directory=True)
+                    target_name = "rclipctl" if kind == "bin" else "install.sh"
+                    target = external_managed / target_name
+                    target.write_bytes(b"external\n")
+                    sentinels[target] = b"external\n"
+
+                result = self._run_common_cleanup(app_dir)
+
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("unsafe", result.stderr)
+                for path, content in sentinels.items():
+                    self.assertEqual(path.read_bytes(), content)
+
+    def test_cleanup_rejects_symlinked_installer_subdirectories_before_mutation(
+        self,
+    ) -> None:
+        cases = {
+            "install": ("install", "common.sh"),
+            "systemd": ("systemd", "user/rclipboard.service"),
+            "systemd-user": ("systemd/user", "rclipboard.service"),
+            "launchd": ("launchd", "com.rclipboard.service.plist.in"),
+            "config": ("config", "rclipboard.conf.example"),
+        }
+        for name, (relative_dir, payload_name) in cases.items():
+            with self.subTest(directory=name):
+                case_root = self.tmp_path / f"installer-subdir-{name}"
+                app_dir = case_root / "config/rclipboard"
+                sentinels = self._write_cleanup_baseline(app_dir)
+                managed_dir = app_dir / "installer" / relative_dir
+                if managed_dir.exists():
+                    shutil.rmtree(managed_dir)
+                managed_dir.parent.mkdir(parents=True, exist_ok=True)
+                external_dir = case_root / "external"
+                external_dir.mkdir(parents=True)
+                managed_dir.symlink_to(external_dir, target_is_directory=True)
+                external_target = external_dir / payload_name
+                external_target.parent.mkdir(parents=True, exist_ok=True)
+                external_target.write_bytes(b"external payload\n")
+                sentinels[external_target] = b"external payload\n"
+
+                result = self._run_common_cleanup(app_dir)
+
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("unsafe", result.stderr)
+                for path, content in sentinels.items():
+                    self.assertEqual(path.read_bytes(), content)
+
 
 class DarwinUninstallTests(_LifecycleTestCase):
     platform = "Darwin"
@@ -1689,11 +1930,13 @@ class DarwinUninstallTests(_LifecycleTestCase):
     def test_uninstall_keeps_unmarked_launch_agent(self) -> None:
         plist = self.home / "Library/LaunchAgents/com.rclipboard.service.plist"
         plist.write_bytes(b"user-owned plist\n")
+        self.launchctl_log.unlink(missing_ok=True)
 
         result = self.run_installed()
 
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(plist.read_bytes(), b"user-owned plist\n")
+        self.assertFalse(self.launchctl_log.exists())
 
 
 class InstallerLayoutTests(unittest.TestCase):

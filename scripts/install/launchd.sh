@@ -109,6 +109,8 @@ service_restart() {
 }
 
 service_uninstall() {
+    managed_file_has_marker "$LAUNCHD_PLIST" "$LAUNCHD_MARKER" xml \
+        || return 0
     service_stop || return $?
     remove_marked_file "$LAUNCHD_PLIST" "$LAUNCHD_MARKER" xml || return 1
 }

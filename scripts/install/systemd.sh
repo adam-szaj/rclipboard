@@ -60,21 +60,36 @@ remove_legacy_systemd_dropin() {
     local content expected
 
     [ -f "$override" ] && [ ! -L "$override" ] || return 0
-    content=$(cat "$override")
+    content=$(cat "$override") || return 1
     expected="[Service]
 WorkingDirectory=$APP_DIR"
     if [ "$content" = "$expected" ]; then
-        rm -f "$override"
+        rm -f "$override" || return 1
+        SYSTEMD_UNINSTALL_CHANGED=1
         rmdir "$dropin_dir" 2>/dev/null || true
     fi
 }
 
+uninstall_owned_systemd_unit() {
+    local path="$1" unit="$2"
+
+    managed_file_has_marker "$path" "$SYSTEMD_MARKER" || return 0
+    "$SYSTEMCTL_BIN" --user disable --now "$unit" \
+        >/dev/null 2>&1 || return 1
+    remove_marked_file "$path" "$SYSTEMD_MARKER" || return 1
+    SYSTEMD_UNINSTALL_CHANGED=1
+}
+
 service_uninstall() {
-    service_stop
-    remove_marked_file \
-        "$SYSTEMD_UNIT_DIR/rclipboard-display.service" "$SYSTEMD_MARKER"
-    remove_marked_file \
-        "$SYSTEMD_UNIT_DIR/rclipboard.service" "$SYSTEMD_MARKER"
-    remove_legacy_systemd_dropin
-    "$SYSTEMCTL_BIN" --user daemon-reload
+    SYSTEMD_UNINSTALL_CHANGED=0
+    uninstall_owned_systemd_unit \
+        "$SYSTEMD_UNIT_DIR/rclipboard-display.service" \
+        rclipboard-display.service || return 1
+    uninstall_owned_systemd_unit \
+        "$SYSTEMD_UNIT_DIR/rclipboard.service" \
+        rclipboard.service || return 1
+    remove_legacy_systemd_dropin || return 1
+    if [ "$SYSTEMD_UNINSTALL_CHANGED" -eq 1 ]; then
+        "$SYSTEMCTL_BIN" --user daemon-reload || return 1
+    fi
 }
