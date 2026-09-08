@@ -15,6 +15,7 @@ from __future__ import annotations
 import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -105,6 +106,67 @@ def _run_config_env(config: Path) -> str:
 
 
 # ── layout + units ───────────────────────────────────────────────────────────
+
+
+class InstallerConfigTests(unittest.TestCase):
+    def test_config_examples_are_identical(self) -> None:
+        canonical = ROOT_DIR / "scripts/config/rclipboard.conf.example"
+        legacy = ROOT_DIR / "scripts/systemd/user/rclipboard.conf.example"
+        self.assertEqual(canonical.read_bytes(), legacy.read_bytes())
+
+    def test_config_defaults_to_uds_without_proxy_or_xsel(self) -> None:
+        with (ROOT_DIR / "scripts/config/rclipboard.conf.example").open("rb") as f:
+            data = tomllib.load(f)
+        self.assertEqual(
+            data["server"]["endpoint"],
+            "uds://${XDG_RUNTIME_DIR}/rclipboard/uds.sock",
+        )
+        self.assertEqual(data["client"]["transport"], "uds")
+        self.assertFalse(data["proxy"]["enabled"])
+        self.assertFalse(data["xsel"]["enabled"])
+
+
+class ServiceRunnerTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.home = Path(self._tmp.name) / "home"
+        self.home.mkdir()
+
+    def tearDown(self) -> None:
+        self._tmp.cleanup()
+
+    def test_service_runner_creates_private_runtime_env(self) -> None:
+        app_dir = self.home / ".config/rclipboard"
+        fake = app_dir / "venv/bin/rclipboard"
+        fake.parent.mkdir(parents=True)
+        fake.write_text(
+            "#!/bin/sh\n"
+            "if [ \"${1:-}\" = config ]; then\n"
+            "  printf 'RCLIPBOARD_ENDPOINT=\"uds:///tmp/test.sock\"\\n'\n"
+            "else\n"
+            "  printf '%s\\n' \"$RCLIPBOARD_CONFIG\" > \"$RUN_LOG\"\n"
+            "fi\n"
+        )
+        fake.chmod(0o755)
+        runtime_root = self.home / "runtime"
+        result = subprocess.run(
+            ["bash", str(ROOT_DIR / "scripts/bin/rclipboard-service-run")],
+            env={
+                **os.environ,
+                "HOME": str(self.home),
+                "XDG_RUNTIME_DIR": str(runtime_root),
+                "RUN_LOG": str(self.home / "runner.log"),
+            },
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        env_file = runtime_root / "rclipboard/env"
+        self.assertEqual(stat.S_IMODE(env_file.stat().st_mode), 0o600)
+        self.assertEqual(
+            (self.home / "runner.log").read_text().strip(),
+            str(app_dir / "config.toml"),
+        )
 
 
 class InstallerLayoutTests(unittest.TestCase):

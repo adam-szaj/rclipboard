@@ -1,0 +1,74 @@
+# rclipboard configuration
+# Location: ~/.config/rclipboard/config.toml
+#
+# Environment variables (${VAR}) are expanded at runtime by the server and by
+# `rclipboard config env`.  The env file is regenerated automatically at each
+# service start via ExecStartPre into $XDG_RUNTIME_DIR/rclipboard/env (tmpfs).
+# To apply changes without restarting the service, run:
+#
+#   systemctl --user restart rclipboard.service
+
+[server]
+# Bind endpoint.  Supported formats:
+#   "uds://${XDG_RUNTIME_DIR}/rclipboard/uds.sock"  — Unix Domain Socket
+#   "127.0.0.1:8989"                                 — TCP
+#   "https://127.0.0.1:8989"                         — HTTPS (needs [ssl])
+    endpoint = "uds://${XDG_RUNTIME_DIR}/rclipboard/uds.sock"
+
+    # Logging
+    log_level    = "warning"   # uvicorn level: debug | info | warning | error
+    py_log_level = "WARNING"   # Python logging level
+    notify_delay_ms = 500   # clipboard notification debounce (ms)
+
+    # Tie window (ms) for time-based sync conflict resolution between this
+    # server and a connected proxy/upstream. Timestamps within this window are
+    # treated as a tie → the local value wins. Absorbs clock-offset estimation
+    # error and minor skew; well below the gap between human clipboard actions.
+    sync_tie_ms = 100
+
+    # Retention for ENCRYPTED messages (seconds). An encrypted item's value is
+    # blanked to "" this many seconds after it was written (meta["ts"]); the
+    # topic itself keeps existing. Plain items are unaffected. 0 disables the
+    # feature (encrypted items never expire). Default 30.
+    encrypted_ttl_s = 30
+
+    # Admin token for key registry (POST /v1/keys.publish).
+    # Leave empty to disable key registration.
+    # admin_token = ""
+
+
+# X11 clipboard polling via xsel
+[xsel]
+    enabled              = false
+    path         = "/usr/bin/xsel"
+    interval_ms  = 250
+    # Encrypt clipboard data captured from X11 via rclipctl exec.
+    # Requires age and rclipctl on PATH, and at least one registered public key.
+    # Default: false (disabled)
+    encrypt      = false
+    # File holding DISPLAY/WAYLAND_DISPLAY/XAUTHORITY for the current graphical
+    # session. Written by rclipboard-display.service (bound to
+    # graphical-session.target) and re-read by xsel on every invocation, so the
+    # server picks up the display without a restart after login. Default:
+    # ${XDG_RUNTIME_DIR}/rclipboard/display.env
+    display_env_file = "${XDG_RUNTIME_DIR}/rclipboard/display.env"
+
+[proxy]
+    # Enable proxy mode: connect to an upstream server and replicate topics locally.
+    enabled = false
+    # Upstream server endpoint — same formats as server.endpoint above.
+    upstream_endpoint = "127.0.0.1:8988"
+    # upstream_endpoint = "uds://${XDG_RUNTIME_DIR}/rclipboard/upstream.sock"
+
+[ssl]
+    certfile = ""
+    keyfile  = ""
+    # keyfile_password = ""
+
+[client]
+    # Transport preference for rclipctl: auto | uds | tcp
+    transport = "uds"
+
+# Override which endpoint rclipctl connects to.
+# Defaults to server.endpoint when empty.
+# endpoint = ""

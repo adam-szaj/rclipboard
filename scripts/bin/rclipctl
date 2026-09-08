@@ -10,6 +10,8 @@ fi
 cmd="$1"; shift
 
 RCLIP_CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/rclipboard"
+export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-$HOME/.local/run}"
+_RUNTIME_ENV="$XDG_RUNTIME_DIR/rclipboard/env"
 
 # GET /v1/keys.list requires the admin token (Bearer). Sent when configured;
 # used by keys-list and put/exec --fetch-keys.
@@ -248,14 +250,11 @@ EOS
 }
 
 # ── load configuration ────────────────────────────────────────────────────────
-export XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-${HOME}/.local/run}
-_RUNTIME_ENV="${XDG_RUNTIME_DIR}/rclipboard/env"
-
 if [ -z "${RCLIP_CONF:-}" ]; then
     if [ -r "$_RUNTIME_ENV" ]; then
         RCLIP_CONF="$_RUNTIME_ENV"
     else
-        RCLIP_CONF="$HOME/.config/rclipboard/env"
+        RCLIP_CONF="$RCLIP_CONFIG_DIR/env"
     fi
 fi
 unset _RUNTIME_ENV
@@ -264,7 +263,7 @@ unset _RUNTIME_ENV
 # default config is best-effort (plain transport commands must keep working
 # without a local rclipboard install).
 CONFIG_EXPLICIT="${CONFIG_FILE:+1}"
-CONFIG_FILE="${CONFIG_FILE:-$HOME/.config/rclipboard/config.toml}"
+CONFIG_FILE="${CONFIG_FILE:-$RCLIP_CONFIG_DIR/config.toml}"
 if RCLIPBOARD_BIN="$(find_rclipboard)"; then
     # shellcheck disable=SC2046
     if [ -f "$CONFIG_FILE" ] && pidof rclipboard &> /dev/null; then

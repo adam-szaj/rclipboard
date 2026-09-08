@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+APP_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/rclipboard"
+RUNTIME_ROOT="${XDG_RUNTIME_DIR:-$HOME/.local/run}"
+RUNTIME_DIR="$RUNTIME_ROOT/rclipboard"
+ENV_FILE="$RUNTIME_DIR/env"
+RCLIPBOARD_BIN="$APP_DIR/venv/bin/rclipboard"
+
+umask 077
+mkdir -p "$RUNTIME_DIR"
+chmod 0700 "$RUNTIME_DIR"
+export XDG_RUNTIME_DIR="$RUNTIME_ROOT"
+export RCLIPBOARD_CONFIG="$APP_DIR/config.toml"
+
+trap 'rm -f "$ENV_FILE.tmp"' EXIT
+"$RCLIPBOARD_BIN" config env --config "$RCLIPBOARD_CONFIG" > "$ENV_FILE.tmp"
+chmod 0600 "$ENV_FILE.tmp"
+mv -f "$ENV_FILE.tmp" "$ENV_FILE"
+trap - EXIT
+exec "$RCLIPBOARD_BIN"
