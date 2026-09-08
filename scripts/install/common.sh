@@ -1,11 +1,17 @@
 #!/usr/bin/env bash
 
 managed_file_has_marker() {
-    local path="$1" marker="$2" first_line=""
+    local path="$1" marker="$2" first_line="" second_line=""
 
     [ -f "$path" ] && [ ! -L "$path" ] || return 1
-    IFS= read -r first_line < "$path" || true
-    [ "$first_line" = "$marker" ]
+    {
+        IFS= read -r first_line || true
+        IFS= read -r second_line || true
+    } < "$path"
+    [ "$first_line" = "$marker" ] || {
+        [ "$first_line" = '<?xml version="1.0" encoding="UTF-8"?>' ] \
+            && [ "$second_line" = "$marker" ]
+    }
 }
 
 check_managed_file_collision() {
@@ -45,4 +51,21 @@ render_template() {
         rm -f "$temporary"
         return 1
     }
+}
+
+xml_escape() {
+    printf '%s' "$1" | sed \
+        -e 's/&/\&amp;/g' \
+        -e 's/</\&lt;/g' \
+        -e 's/>/\&gt;/g' \
+        -e 's/"/\&quot;/g' \
+        -e "s/'/\&apos;/g"
+}
+
+render_xml_template() {
+    local source="$1" target="$2" placeholder="$3" value="$4"
+    local escaped_value
+
+    escaped_value=$(xml_escape "$value") || return 1
+    render_template "$source" "$target" "$placeholder" "$escaped_value"
 }
