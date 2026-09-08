@@ -267,7 +267,7 @@ CONFIG_FILE="${CONFIG_FILE:-$RCLIP_CONFIG_DIR/config.toml}"
 if RCLIPBOARD_BIN="$(find_rclipboard)"; then
     # shellcheck disable=SC2046
     if [ -f "$CONFIG_FILE" ] && pidof rclipboard &> /dev/null; then
-        $RCLIPBOARD_BIN config env --config "$CONFIG_FILE" > ${RCLIP_CONF}
+        "$RCLIPBOARD_BIN" config env --config "$CONFIG_FILE" > "$RCLIP_CONF"
     fi
 elif [ -n "$CONFIG_EXPLICIT" ]; then
     echo "error: rclipboard not found in PATH; cannot load --config" >&2

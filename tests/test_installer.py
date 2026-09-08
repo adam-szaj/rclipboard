@@ -112,6 +112,11 @@ class InstallerConfigTests(unittest.TestCase):
     def test_config_examples_are_identical(self) -> None:
         canonical = ROOT_DIR / "scripts/config/rclipboard.conf.example"
         legacy = ROOT_DIR / "scripts/systemd/user/rclipboard.conf.example"
+        self.assertTrue(legacy.is_symlink())
+        self.assertEqual(
+            os.readlink(legacy),
+            "../../config/rclipboard.conf.example",
+        )
         self.assertEqual(canonical.read_bytes(), legacy.read_bytes())
 
     def test_config_defaults_to_uds_without_proxy_or_xsel(self) -> None:
