@@ -26,14 +26,27 @@ from pathlib import Path
 ROOT_DIR = Path(__file__).resolve().parent.parent
 
 # Scripts that must end up in BIN_DIR after installation.
-EXPECTED_SCRIPTS = [
+EXPECTED_PUBLIC_SCRIPTS = {
     "rclipctl",
-    "rclip-smoke.sh",
     "rcliptunel",
-    "install-systemd-user.sh",
     "rclipboard-launcher",
+    "rclipboard-service-run",
     "rclipboard-setup",
-]
+    "rclipboard-update",
+    "rclipboard-uninstall",
+}
+EXPECTED_SCRIPTS = sorted(EXPECTED_PUBLIC_SCRIPTS)
+
+EXPECTED_INSTALLER_FILES = {
+    "install.sh",
+    "install/common.sh",
+    "install/systemd.sh",
+    "install/launchd.sh",
+    "systemd/user/rclipboard.service",
+    "systemd/user/rclipboard-display.service",
+    "launchd/com.rclipboard.service.plist.in",
+    "config/rclipboard.conf.example",
+}
 
 # Systemd service units that must be installed.
 EXPECTED_UNITS = [
@@ -48,6 +61,7 @@ def _make_fake_systemctl(fake_bin: Path) -> Path:
         "#!/usr/bin/env bash\n"
         "set -euo pipefail\n"
         f"printf '%s\\n' \"$*\" >> {log}\n"
+        "exit \"${SYSTEMCTL_STATUS:-0}\"\n"
     )
     stub.chmod(0o755)
     return log
@@ -67,6 +81,28 @@ def _make_fake_launchctl(fake_bin: Path) -> Path:
     )
     stub.chmod(0o755)
     return log
+
+
+def _make_fake_python(fake_bin: Path) -> Path:
+    stub = fake_bin / "python3"
+    stub.write_text(
+        "#!/bin/sh\n"
+        "if [ \"${1:-}\" = -m ] && [ \"${2:-}\" = venv ]; then\n"
+        "    mkdir -p \"$3/bin\"\n"
+        "    printf '#!/bin/sh\\nexit 0\\n' > \"$3/bin/python\"\n"
+        "    printf '#!/bin/sh\\n[ -z \"${PIP_LOG:-}\" ] || "
+        "printf \"%%s\\\\n\" \"$*\" >> \"$PIP_LOG\"\\nexit 0\\n' "
+        "> \"$3/bin/pip\"\n"
+        "    printf '#!/bin/sh\\nprintf '\"'\"'RCLIPBOARD_XSEL=\\\"0\\\"\\n'\"'\"'\\n' "
+        "> \"$3/bin/rclipboard\"\n"
+        "    chmod 0755 \"$3/bin/python\" \"$3/bin/pip\" "
+        "\"$3/bin/rclipboard\"\n"
+        "    exit 0\n"
+        "fi\n"
+        f'exec "{sys.executable}" "$@"\n'
+    )
+    stub.chmod(0o755)
+    return stub
 
 
 def _run_systemd_adapter(
@@ -220,25 +256,52 @@ def _run_installer(
     home: Path,
     fake_bin: Path,
     *,
+    platform: str = "Linux",
+    args: list[str] | None = None,
+    input_text: str | None = None,
     skip_pip: bool = True,
     extra_env: dict[str, str] | None = None,
-) -> subprocess.CompletedProcess:
+) -> subprocess.CompletedProcess[str]:
     env = os.environ.copy()
     env.pop("XDG_CONFIG_HOME", None)
     env["HOME"] = str(home)
     env["PATH"] = f"{fake_bin}:{env['PATH']}"
+    env["RCLIPBOARD_INSTALL_UNAME"] = platform
+    env["SYSTEMCTL_BIN"] = str(fake_bin / "systemctl")
+    env["LAUNCHCTL_BIN"] = str(fake_bin / "launchctl")
+    env["LAUNCHCTL_LOG"] = str(fake_bin.parent / "launchctl.log")
+    if not (fake_bin / "python3").exists():
+        _make_fake_python(fake_bin)
+    env["PYTHON_BIN"] = str(fake_bin / "python3")
     if skip_pip:
         env["RCLIPBOARD_INSTALL_SKIP_PIP"] = "1"
     if extra_env:
         env.update(extra_env)
     return subprocess.run(
-        ["bash", str(ROOT_DIR / "scripts" / "install-systemd-user.sh"), str(ROOT_DIR)],
-        check=True,
+        ["bash", str(ROOT_DIR / "scripts/install.sh"), *(args or [])],
         cwd=ROOT_DIR,
         env=env,
+        input=input_text,
         capture_output=True,
         text=True,
     )
+
+
+def _read_metadata(path: Path) -> dict[str, str]:
+    return dict(
+        line.split("=", 1)
+        for line in path.read_text().splitlines()
+    )
+
+
+def _current_branch() -> str:
+    return subprocess.run(
+        ["git", "branch", "--show-current"],
+        cwd=ROOT_DIR,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
 
 
 def _run_config_env(config: Path) -> str:
@@ -646,6 +709,458 @@ class LaunchdAdapterTests(unittest.TestCase):
         self.assertEqual(self.plist_path.read_bytes(), original)
 
 
+class UnifiedInstallTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.tmp_path = Path(self._tmp.name)
+        self.home = self.tmp_path / "home"
+        self.fake_bin = self.tmp_path / "fake-bin"
+        self.home.mkdir()
+        self.fake_bin.mkdir()
+        self.systemctl_log = _make_fake_systemctl(self.fake_bin)
+        self.launchctl_log = _make_fake_launchctl(self.fake_bin)
+        self.result = _run_installer(
+            self.home,
+            self.fake_bin,
+            args=["--no-start"],
+        )
+        self.assertEqual(self.result.returncode, 0, self.result.stderr)
+        self.app_dir = self.home / ".config/rclipboard"
+        self.bin_dir = self.app_dir / "bin"
+
+    def tearDown(self) -> None:
+        self._tmp.cleanup()
+
+    def test_only_public_scripts_are_installed(self) -> None:
+        installed = {p.name for p in self.bin_dir.iterdir() if p.is_file()}
+        self.assertEqual(installed, EXPECTED_PUBLIC_SCRIPTS)
+
+    def test_installer_payload_is_exact_and_has_safe_modes(self) -> None:
+        installer_dir = self.app_dir / "installer"
+        installed = {
+            str(path.relative_to(installer_dir))
+            for path in installer_dir.rglob("*")
+            if path.is_file()
+        }
+        self.assertEqual(installed, EXPECTED_INSTALLER_FILES)
+        for relative in EXPECTED_INSTALLER_FILES:
+            path = installer_dir / relative
+            expected_mode = 0o755 if path.suffix == ".sh" else 0o644
+            self.assertEqual(stat.S_IMODE(path.stat().st_mode), expected_mode)
+        for name in EXPECTED_PUBLIC_SCRIPTS:
+            self.assertEqual(
+                stat.S_IMODE((self.bin_dir / name).stat().st_mode),
+                0o755,
+            )
+
+    def test_metadata_records_repository_remote_and_branch(self) -> None:
+        metadata = _read_metadata(self.app_dir / "install.conf")
+        self.assertEqual(metadata["repo_dir"], str(ROOT_DIR))
+        self.assertEqual(metadata["remote"], "origin")
+        self.assertEqual(metadata["branch"], _current_branch())
+        self.assertEqual(
+            stat.S_IMODE((self.app_dir / "install.conf").stat().st_mode),
+            0o600,
+        )
+
+    def test_explicit_branch_is_recorded(self) -> None:
+        home = self.tmp_path / "branch-home"
+        home.mkdir()
+        result = _run_installer(
+            home,
+            self.fake_bin,
+            args=["--remote", "origin", "--branch", "main", "--no-start"],
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        metadata = _read_metadata(home / ".config/rclipboard/install.conf")
+        self.assertEqual(metadata["remote"], "origin")
+        self.assertEqual(metadata["branch"], "main")
+
+    def test_linux_dispatch_installs_only_systemd_service(self) -> None:
+        self.assertTrue(
+            (self.home / ".config/systemd/user/rclipboard.service").is_file()
+        )
+        self.assertFalse(
+            (self.home / "Library/LaunchAgents/com.rclipboard.service.plist").exists()
+        )
+        self.assertIn("--user daemon-reload", self.systemctl_log.read_text())
+
+    def test_no_start_does_not_enable_linux_service(self) -> None:
+        self.assertNotIn("enable --now", self.systemctl_log.read_text())
+
+    def test_default_install_starts_linux_service(self) -> None:
+        home = self.tmp_path / "started-home"
+        home.mkdir()
+        self.systemctl_log.unlink()
+        result = _run_installer(home, self.fake_bin)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(
+            "--user enable --now rclipboard.service",
+            self.systemctl_log.read_text(),
+        )
+
+    def test_package_is_installed_from_repository(self) -> None:
+        home = self.tmp_path / "package-home"
+        pip_log = self.tmp_path / "pip.log"
+        home.mkdir()
+        result = _run_installer(
+            home,
+            self.fake_bin,
+            args=["--no-start"],
+            skip_pip=False,
+            extra_env={"PIP_LOG": str(pip_log)},
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(pip_log.read_text(), f"install {ROOT_DIR} --quiet\n")
+
+    def test_metadata_is_not_written_when_service_install_fails(self) -> None:
+        home = self.tmp_path / "service-failure-home"
+        home.mkdir()
+        result = _run_installer(
+            home,
+            self.fake_bin,
+            args=["--no-start"],
+            extra_env={"SYSTEMCTL_STATUS": "7"},
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse((home / ".config/rclipboard/install.conf").exists())
+
+    def test_darwin_dispatch_installs_only_launchd_service(self) -> None:
+        home = self.tmp_path / "darwin-home"
+        home.mkdir()
+        result = _run_installer(
+            home,
+            self.fake_bin,
+            platform="Darwin",
+            args=["--no-start"],
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(
+            (home / "Library/LaunchAgents/com.rclipboard.service.plist").is_file()
+        )
+        self.assertFalse((home / ".config/systemd/user").exists())
+
+    def test_custom_xdg_config_home_is_used(self) -> None:
+        home = self.tmp_path / "xdg-home"
+        xdg_config = self.tmp_path / "xdg-config"
+        home.mkdir()
+        result = _run_installer(
+            home,
+            self.fake_bin,
+            args=["--no-start"],
+            extra_env={"XDG_CONFIG_HOME": str(xdg_config)},
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        app_dir = xdg_config / "rclipboard"
+        self.assertTrue((app_dir / "install.conf").is_file())
+        unit = xdg_config / "systemd/user/rclipboard.service"
+        self.assertIn(f"WorkingDirectory={app_dir}", unit.read_text())
+
+    def test_new_config_defaults_to_private_uds(self) -> None:
+        with (self.app_dir / "config.toml").open("rb") as file:
+            config = tomllib.load(file)
+        self.assertEqual(
+            config["server"]["endpoint"],
+            "uds://${XDG_RUNTIME_DIR}/rclipboard/uds.sock",
+        )
+        self.assertEqual(config["client"]["transport"], "uds")
+        self.assertEqual(
+            stat.S_IMODE((self.app_dir / "config.toml").stat().st_mode),
+            0o600,
+        )
+
+    def test_tcp_is_loopback_only_for_new_config(self) -> None:
+        home = self.tmp_path / "tcp-home"
+        home.mkdir()
+        result = _run_installer(
+            home,
+            self.fake_bin,
+            args=["--transport", "tcp", "--no-start"],
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        config_path = home / ".config/rclipboard/config.toml"
+        with config_path.open("rb") as file:
+            config = tomllib.load(file)
+        self.assertEqual(config["server"]["endpoint"], "127.0.0.1:8989")
+        self.assertEqual(config["client"]["transport"], "tcp")
+        self.assertEqual(config["client"]["endpoint"], "127.0.0.1:8989")
+        self.assertNotIn("0.0.0.0", config_path.read_text())
+
+    def test_reinstall_preserves_config_and_all_user_keys(self) -> None:
+        sentinels = {
+            "config.toml": "# custom config\n",
+            "age_key.txt": "private\n",
+            "age_key.pub": "public\n",
+            "known_keys": "known\n",
+        }
+        for name, content in sentinels.items():
+            (self.app_dir / name).write_text(content)
+        result = _run_installer(
+            self.home,
+            self.fake_bin,
+            args=["--transport", "tcp", "--no-start"],
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        for name, content in sentinels.items():
+            with self.subTest(name=name):
+                self.assertEqual((self.app_dir / name).read_text(), content)
+
+    def test_installed_lifecycle_wrappers_delegate_arguments(self) -> None:
+        log = self.tmp_path / "delegation.log"
+        installer = self.app_dir / "installer/install.sh"
+        installer.write_text(
+            "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$DELEGATION_LOG\"\n"
+        )
+        installer.chmod(0o755)
+        env = {
+            **os.environ,
+            "HOME": str(self.home),
+            "DELEGATION_LOG": str(log),
+        }
+        update = subprocess.run(
+            [str(self.bin_dir / "rclipboard-update"), "--branch", "topic"],
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+        uninstall = subprocess.run(
+            [str(self.bin_dir / "rclipboard-uninstall"), "--purge-user-data"],
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(update.returncode, 0, update.stderr)
+        self.assertEqual(uninstall.returncode, 0, uninstall.stderr)
+        self.assertEqual(
+            log.read_text(),
+            "--update --branch topic\n--uninstall --purge-user-data\n",
+        )
+
+    def test_metadata_parser_does_not_evaluate_values(self) -> None:
+        touched = self.tmp_path / "evaluated"
+        metadata = self.tmp_path / "install.conf"
+        metadata.write_text(
+            f"repo_dir=$(touch {touched})\nremote=origin\nbranch=main\n"
+        )
+        result = subprocess.run(
+            [
+                "bash",
+                "-c",
+                '. "$1"; read_install_metadata "$2"; printf "%s\\n" "$REPO_DIR"',
+                "metadata-test",
+                str(ROOT_DIR / "scripts/install/common.sh"),
+                str(metadata),
+            ],
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, f"$(touch {touched})\n")
+        self.assertFalse(touched.exists())
+
+    def test_metadata_parser_rejects_invalid_shape(self) -> None:
+        cases = {
+            "duplicate": "repo_dir=/repo\nremote=origin\nremote=again\nbranch=main\n",
+            "unknown": "repo_dir=/repo\nremote=origin\nbranch=main\nextra=value\n",
+            "missing": "repo_dir=/repo\nremote=origin\n",
+        }
+        for name, content in cases.items():
+            with self.subTest(name=name):
+                metadata = self.tmp_path / f"{name}.conf"
+                metadata.write_text(content)
+                result = subprocess.run(
+                    [
+                        "bash",
+                        "-c",
+                        '. "$1"; read_install_metadata "$2"',
+                        "metadata-test",
+                        str(ROOT_DIR / "scripts/install/common.sh"),
+                        str(metadata),
+                    ],
+                    capture_output=True,
+                    text=True,
+                )
+                self.assertNotEqual(result.returncode, 0)
+
+    def test_unsupported_platform_fails_before_app_mutation(self) -> None:
+        home = self.tmp_path / "unsupported-home"
+        home.mkdir()
+        result = _run_installer(
+            home,
+            self.fake_bin,
+            platform="Plan9",
+            args=["--no-start"],
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse((home / ".config/rclipboard").exists())
+
+    def test_old_python_fails_before_app_mutation(self) -> None:
+        home = self.tmp_path / "old-python-home"
+        home.mkdir()
+        old_python = self.fake_bin / "old-python"
+        old_python.write_text("#!/bin/sh\nexit 1\n")
+        old_python.chmod(0o755)
+        result = _run_installer(
+            home,
+            self.fake_bin,
+            args=["--no-start"],
+            extra_env={"PYTHON_BIN": str(old_python)},
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse((home / ".config/rclipboard").exists())
+
+    def test_missing_remote_fails_before_app_mutation(self) -> None:
+        home = self.tmp_path / "missing-remote-home"
+        home.mkdir()
+        result = _run_installer(
+            home,
+            self.fake_bin,
+            args=["--remote", "does-not-exist", "--no-start"],
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse((home / ".config/rclipboard").exists())
+
+    def test_missing_branch_fails_before_app_mutation(self) -> None:
+        home = self.tmp_path / "missing-branch-home"
+        home.mkdir()
+        result = _run_installer(
+            home,
+            self.fake_bin,
+            args=["--branch", "branch-that-does-not-exist", "--no-start"],
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse((home / ".config/rclipboard").exists())
+
+    def test_invalid_transport_fails_before_app_mutation(self) -> None:
+        home = self.tmp_path / "invalid-transport-home"
+        home.mkdir()
+        result = _run_installer(
+            home,
+            self.fake_bin,
+            args=["--transport", "auto", "--no-start"],
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse((home / ".config/rclipboard").exists())
+
+    def test_detached_head_fails_before_app_mutation(self) -> None:
+        home = self.tmp_path / "detached-home"
+        home.mkdir()
+        real_git = shutil.which("git")
+        self.assertIsNotNone(real_git)
+        git_stub = self.fake_bin / "git"
+        git_stub.write_text(
+            "#!/bin/sh\n"
+            "case \"$*\" in\n"
+            "  *'symbolic-ref --quiet --short HEAD'*) exit 1 ;;\n"
+            "esac\n"
+            f'exec "{real_git}" "$@"\n'
+        )
+        git_stub.chmod(0o755)
+        result = _run_installer(
+            home,
+            self.fake_bin,
+            args=["--no-start"],
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse((home / ".config/rclipboard").exists())
+
+    def test_explicit_branch_does_not_allow_detached_head(self) -> None:
+        home = self.tmp_path / "explicit-detached-home"
+        home.mkdir()
+        real_git = shutil.which("git")
+        self.assertIsNotNone(real_git)
+        git_stub = self.fake_bin / "git"
+        git_stub.write_text(
+            "#!/bin/sh\n"
+            "case \"$*\" in\n"
+            "  *'symbolic-ref --quiet --short HEAD'*) exit 1 ;;\n"
+            "esac\n"
+            f'exec "{real_git}" "$@"\n'
+        )
+        git_stub.chmod(0o755)
+        result = _run_installer(
+            home,
+            self.fake_bin,
+            args=["--branch", "main", "--no-start"],
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse((home / ".config/rclipboard").exists())
+
+    def test_bare_repository_fails_before_app_mutation(self) -> None:
+        home = self.tmp_path / "bare-home"
+        home.mkdir()
+        real_git = shutil.which("git")
+        self.assertIsNotNone(real_git)
+        git_stub = self.fake_bin / "git"
+        git_stub.write_text(
+            "#!/bin/sh\n"
+            "case \"$*\" in\n"
+            "  *'rev-parse --is-bare-repository'*) printf 'true\\n'; exit 0 ;;\n"
+            "esac\n"
+            f'exec "{real_git}" "$@"\n'
+        )
+        git_stub.chmod(0o755)
+        result = _run_installer(
+            home,
+            self.fake_bin,
+            args=["--no-start"],
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse((home / ".config/rclipboard").exists())
+
+    def test_non_checkout_fails_before_app_mutation(self) -> None:
+        home = self.tmp_path / "non-checkout-home"
+        home.mkdir()
+        real_git = shutil.which("git")
+        self.assertIsNotNone(real_git)
+        git_stub = self.fake_bin / "git"
+        git_stub.write_text(
+            "#!/bin/sh\n"
+            "case \"$*\" in\n"
+            "  *'rev-parse --is-inside-work-tree'*) exit 1 ;;\n"
+            "esac\n"
+            f'exec "{real_git}" "$@"\n'
+        )
+        git_stub.chmod(0o755)
+        result = _run_installer(
+            home,
+            self.fake_bin,
+            args=["--no-start"],
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse((home / ".config/rclipboard").exists())
+
+    def test_unmanaged_service_collision_fails_before_app_mutation(self) -> None:
+        home = self.tmp_path / "collision-home"
+        unit = home / ".config/systemd/user/rclipboard.service"
+        unit.parent.mkdir(parents=True)
+        original = b"[Unit]\nDescription=user-owned\n"
+        unit.write_bytes(original)
+        result = _run_installer(
+            home,
+            self.fake_bin,
+            args=["--no-start"],
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(unit.read_bytes(), original)
+        self.assertFalse((home / ".config/rclipboard").exists())
+
+    def test_unmanaged_display_collision_fails_before_app_mutation(self) -> None:
+        home = self.tmp_path / "display-collision-home"
+        unit = home / ".config/systemd/user/rclipboard-display.service"
+        unit.parent.mkdir(parents=True)
+        original = b"[Unit]\nDescription=user-owned display\n"
+        unit.write_bytes(original)
+        result = _run_installer(
+            home,
+            self.fake_bin,
+            args=["--no-start"],
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(unit.read_bytes(), original)
+        self.assertFalse((home / ".config/rclipboard").exists())
+
+
 class InstallerLayoutTests(unittest.TestCase):
     """Directory structure, scripts, and unit files after a fresh install."""
 
@@ -658,7 +1173,9 @@ class InstallerLayoutTests(unittest.TestCase):
         cls.home.mkdir()
         cls.fake_bin.mkdir()
         cls.systemctl_log = _make_fake_systemctl(cls.fake_bin)
-        _run_installer(cls.home, cls.fake_bin)
+        result = _run_installer(cls.home, cls.fake_bin, args=["--no-start"])
+        if result.returncode != 0:
+            raise AssertionError(result.stderr)
         cls.app_dir = cls.home / ".config" / "rclipboard"
         cls.bin_dir = cls.app_dir / "bin"
         cls.venv_dir = cls.app_dir / "venv"
@@ -723,6 +1240,7 @@ class InstallerLayoutTests(unittest.TestCase):
             _run_installer(
                 home,
                 fake_bin,
+                args=["--no-start"],
                 extra_env={"XDG_CONFIG_HOME": str(xdg_config)},
             )
             app_dir = xdg_config / "rclipboard"
@@ -787,10 +1305,12 @@ class InstallerIdempotencyTests(unittest.TestCase):
 
     def test_second_install_preserves_config_toml(self) -> None:
         home, fake_bin, app_dir = self._fresh_env()
-        _run_installer(home, fake_bin)
+        result = _run_installer(home, fake_bin, args=["--no-start"])
+        self.assertEqual(result.returncode, 0, result.stderr)
         config = app_dir / "config.toml"
         config.write_text("# sentinel\n")
-        _run_installer(home, fake_bin)
+        result = _run_installer(home, fake_bin, args=["--no-start"])
+        self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(config.read_text(), "# sentinel\n")
 
 

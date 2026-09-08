@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+APP_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/rclipboard"
+exec "$APP_DIR/installer/install.sh" --uninstall "$@"
