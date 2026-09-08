@@ -1,4 +1,5 @@
 Session.vim
+.worktrees/
 __pycache__/
 .pyre/
 resume.claude
