@@ -10,23 +10,24 @@ SYSTEMD_TEMPLATE_DIR="$SYSTEMD_ADAPTER_DIR/../systemd/user"
 
 service_preflight() {
     check_managed_file_collision \
-        "$SYSTEMD_UNIT_DIR/rclipboard.service" "$SYSTEMD_MARKER"
+        "$SYSTEMD_UNIT_DIR/rclipboard.service" "$SYSTEMD_MARKER" || return 1
     check_managed_file_collision \
-        "$SYSTEMD_UNIT_DIR/rclipboard-display.service" "$SYSTEMD_MARKER"
+        "$SYSTEMD_UNIT_DIR/rclipboard-display.service" "$SYSTEMD_MARKER" \
+        || return 1
 }
 
 service_install() {
-    service_preflight
-    mkdir -p "$SYSTEMD_UNIT_DIR"
+    service_preflight || return 1
+    mkdir -p "$SYSTEMD_UNIT_DIR" || return 1
     render_template \
         "$SYSTEMD_TEMPLATE_DIR/rclipboard.service" \
         "$SYSTEMD_UNIT_DIR/rclipboard.service" \
-        "@APP_DIR@" "$APP_DIR"
+        "@APP_DIR@" "$APP_DIR" || return 1
     render_template \
         "$SYSTEMD_TEMPLATE_DIR/rclipboard-display.service" \
         "$SYSTEMD_UNIT_DIR/rclipboard-display.service" \
-        "@APP_DIR@" "$APP_DIR"
-    "$SYSTEMCTL_BIN" --user daemon-reload
+        "@APP_DIR@" "$APP_DIR" || return 1
+    "$SYSTEMCTL_BIN" --user daemon-reload || return 1
 }
 
 service_start() {

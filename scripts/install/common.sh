@@ -31,13 +31,18 @@ render_template() {
     local source="$1" target="$2" placeholder="$3" value="$4"
     local escaped_value temporary
 
-    escaped_value=$(printf '%s' "$value" | sed 's/[\\&|]/\\&/g')
+    escaped_value=$(printf '%s' "$value" | sed 's/[\\&|]/\\&/g') || return 1
     temporary="${target}.tmp.$$"
-    if sed "s|$placeholder|$escaped_value|g" "$source" > "$temporary"; then
-        chmod 0644 "$temporary"
-        mv -f "$temporary" "$target"
-    else
+    if ! sed "s|$placeholder|$escaped_value|g" "$source" > "$temporary"; then
         rm -f "$temporary"
         return 1
     fi
+    chmod 0644 "$temporary" || {
+        rm -f "$temporary"
+        return 1
+    }
+    mv -f "$temporary" "$target" || {
+        rm -f "$temporary"
+        return 1
+    }
 }

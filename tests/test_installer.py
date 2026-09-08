@@ -1,10 +1,9 @@
-"""Integration tests for scripts/install-systemd-user.sh.
+"""Installer and Linux systemd-adapter integration tests.
 
 Covers:
   - directory layout and installed scripts
   - config.toml generation from example
-  - systemd unit file content (ExecStart, EnvironmentFile, WorkingDirectory)
-  - WorkingDirectory override.conf for all three services
+  - rendered systemd units using the shared runner and private umask
   - env file output from `rclipboard config env` (via Python interpreter)
   - env file is valid shell syntax
   - env file KEY="value" format
@@ -93,8 +92,17 @@ case "$8" in
     stop) service_stop ;;
     restart) service_restart ;;
     uninstall) service_uninstall ;;
+    install-conditional)
+        if service_install; then
+            exit 0
+        else
+            exit $?
+        fi
+        ;;
 esac
 """
+    env = os.environ.copy()
+    env.pop("XDG_CONFIG_HOME", None)
     return subprocess.run(
         [
             "bash",
@@ -110,7 +118,7 @@ esac
             str(ROOT_DIR / "scripts/install/systemd.sh"),
             action,
         ],
-        env={**os.environ, "HOME": str(home)},
+        env={**env, "HOME": str(home)},
         capture_output=True,
         text=True,
     )
@@ -124,6 +132,7 @@ def _run_installer(
     extra_env: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess:
     env = os.environ.copy()
+    env.pop("XDG_CONFIG_HOME", None)
     env["HOME"] = str(home)
     env["PATH"] = f"{fake_bin}:{env['PATH']}"
     if skip_pip:
@@ -297,6 +306,16 @@ class SystemdAdapterTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(unit.read_bytes(), original)
 
+    def test_linux_conditional_install_does_not_overwrite_collision(self) -> None:
+        unit = self.unit_dir / "rclipboard.service"
+        original = b"[Unit]\nDescription=user-owned\n"
+        unit.write_bytes(original)
+        result = _run_systemd_adapter(
+            self.home, self.fake_bin, action="install-conditional"
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(unit.read_bytes(), original)
+
     def test_linux_stop_disables_both_owned_services(self) -> None:
         self.systemctl_log.unlink()
         result = _run_systemd_adapter(self.home, self.fake_bin, action="stop")
@@ -407,6 +426,30 @@ class InstallerLayoutTests(unittest.TestCase):
     def test_working_directory_in_unit(self) -> None:
         text = (self.unit_dir / "rclipboard.service").read_text()
         self.assertIn(f"WorkingDirectory={self.app_dir}", text)
+
+    def test_custom_xdg_config_home_is_used_for_app_and_units(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            home = tmp_path / "home"
+            fake_bin = tmp_path / "fake-bin"
+            xdg_config = tmp_path / "custom-config"
+            home.mkdir()
+            fake_bin.mkdir()
+            _make_fake_systemctl(fake_bin)
+            _run_installer(
+                home,
+                fake_bin,
+                extra_env={"XDG_CONFIG_HOME": str(xdg_config)},
+            )
+            app_dir = xdg_config / "rclipboard"
+            unit = (
+                xdg_config / "systemd/user/rclipboard.service"
+            ).read_text()
+            self.assertTrue((app_dir / "venv/bin/python").exists())
+            self.assertIn(f"WorkingDirectory={app_dir}", unit)
+            self.assertIn(
+                f'ExecStart="{app_dir}/bin/rclipboard-service-run"', unit
+            )
 
     # ── override.conf ─────────────────────────────────────────────────────────
 

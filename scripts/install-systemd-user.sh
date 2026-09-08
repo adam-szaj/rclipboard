@@ -4,7 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_DIR=${1:-$(cd "$SCRIPT_DIR/.." && pwd)}
 
-APP_DIR="$HOME/.config/rclipboard"
+APP_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/rclipboard"
 BIN_DIR="$APP_DIR/bin"
 VENV_DIR="$APP_DIR/venv"
 CONFIG_DIR="$APP_DIR"
