@@ -253,12 +253,27 @@ class InstallScriptTests(unittest.TestCase):
             capture_output=True,
             timeout=60,
         )
+        c.exec_cmd(
+            "bash",
+            "-c",
+            "cd /tmp/rclipboard-src "
+            "&& git init -b main "
+            "&& git config user.name 'Installer Test' "
+            "&& git config user.email 'installer@example.invalid' "
+            "&& git add . "
+            "&& git commit -m fixture "
+            "&& git remote add origin . "
+            "&& printf '#!/bin/sh\\nexit 0\\n' > /tmp/fake-systemctl "
+            "&& chmod 0755 /tmp/fake-systemctl",
+            check=True,
+        )
         # Run install.sh (skip pip to avoid internet dependency)
         subprocess.run(
             c._base_ssh_cmd() + [
                 "env", "RCLIPBOARD_INSTALL_SKIP_PIP=1",
+                "SYSTEMCTL_BIN=/tmp/fake-systemctl",
                 "bash", "/tmp/rclipboard-src/scripts/install.sh",
-                "/tmp/rclipboard-src",
+                "--no-start",
             ],
             check=True,
             capture_output=True,
@@ -278,11 +293,27 @@ class InstallScriptTests(unittest.TestCase):
         self.assertEqual(r.returncode, 0)
 
     def test_install_rclipctl_in_user_bin(self) -> None:
-        r = self.container.exec_cmd("test", "-x", "/root/bin/rclipctl")
+        r = self.container.exec_cmd(
+            "test", "-x", "/root/.config/rclipboard/bin/rclipctl"
+        )
         self.assertEqual(r.returncode, 0)
 
     def test_install_rcliptunel_in_user_bin(self) -> None:
-        r = self.container.exec_cmd("test", "-x", "/root/bin/rcliptunel")
+        r = self.container.exec_cmd(
+            "test", "-x", "/root/.config/rclipboard/bin/rcliptunel"
+        )
+        self.assertEqual(r.returncode, 0)
+
+    def test_install_update_command_is_executable(self) -> None:
+        r = self.container.exec_cmd(
+            "test", "-x", "/root/.config/rclipboard/bin/rclipboard-update"
+        )
+        self.assertEqual(r.returncode, 0)
+
+    def test_install_uninstall_command_is_executable(self) -> None:
+        r = self.container.exec_cmd(
+            "test", "-x", "/root/.config/rclipboard/bin/rclipboard-uninstall"
+        )
         self.assertEqual(r.returncode, 0)
 
     def test_install_rclipboard_setup_in_config_bin(self) -> None:
@@ -313,8 +344,9 @@ class InstallScriptTests(unittest.TestCase):
         subprocess.run(
             c._base_ssh_cmd() + [
                 "env", "RCLIPBOARD_INSTALL_SKIP_PIP=1",
+                "SYSTEMCTL_BIN=/tmp/fake-systemctl",
                 "bash", "/tmp/rclipboard-src/scripts/install.sh",
-                "/tmp/rclipboard-src",
+                "--no-start",
             ],
             check=True,
             capture_output=True,

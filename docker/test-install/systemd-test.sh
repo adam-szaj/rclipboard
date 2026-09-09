@@ -25,11 +25,13 @@ _user() {
     su - tester -c "XDG_RUNTIME_DIR=/run/user/$uid DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$uid/bus $*"
 }
 
-_user "bash $REPO/scripts/install-systemd-user.sh $REPO"
+_user "$REPO/scripts/install.sh"
+
+_user "test -x /home/tester/.config/rclipboard/bin/rclipboard-update"
+_user "test -x /home/tester/.config/rclipboard/bin/rclipboard-uninstall"
 
 echo "── 3/3 unit loadable + service starts ──"
 _user "systemctl --user cat rclipboard.service > /dev/null"
-_user "systemctl --user start rclipboard.service"
 # The default config.toml binds a UDS socket under $XDG_RUNTIME_DIR.
 UDS_SOCK="/run/user/$(id -u tester)/rclipboard/uds.sock"
 _health() {

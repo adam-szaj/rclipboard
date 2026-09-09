@@ -7,6 +7,7 @@ RUN apt-get update -y && \
         python3-venv \
         python3-pip \
         procps \
+        git \
         rsync && \
     rm -rf /var/lib/apt/lists/* && \
     mkdir -p /run/sshd /root/.ssh && \

@@ -8,6 +8,7 @@ UDS  ?= $(XDG_RUNTIME_DIR)/rclipboard.sock
 KEY  ?= key.pem
 CERT ?= cert.pem
 LOG_LEVEL ?= warning
+USER_CONFIG_HOME := $(if $(XDG_CONFIG_HOME),$(XDG_CONFIG_HOME),$(HOME)/.config)
 
 # Proxy upstream config
 UPSTREAM_HOST ?= 127.0.0.1
@@ -22,7 +23,7 @@ IMAGE ?= rclipboard:latest
 TUNEL_TEST_IMAGE ?= rcliptunel-test:latest
 DEPLOY_TEST_IMAGE ?= rclipboard-deploy-test:latest
 
-.PHONY: help install run run-dev run-uds run-https run-proxy run-dev-proxy cert cert-san health status topics docker-build docker-run docker-run-proxy docker-build-tunel-test plugin-install plugin-uninstall plugin-reload plugin-demo smoke proxy-smoke test test-functional test-integration test-http test-ws test-proxy-integration test-tunel test-https test-wss test-ssl-proxy-integration test-ssl test-soak test-soak-full test-install-docker test-install-docker-systemd systemd-user-install systemd-user-enable systemd-user-disable nvim-plugin-install nvim-plugin-pack install-no-systemd setup-wizard deploy deploy-dry docker-build-deploy-test test-deploy
+.PHONY: help install run run-dev run-uds run-https run-proxy run-dev-proxy cert cert-san health status topics docker-build docker-run docker-run-proxy docker-build-tunel-test plugin-install plugin-uninstall plugin-reload plugin-demo smoke proxy-smoke test test-functional test-integration test-http test-ws test-proxy-integration test-tunel test-https test-wss test-ssl-proxy-integration test-ssl test-soak test-soak-full test-install-docker test-install-docker-systemd service-install service-update service-reset service-uninstall systemd-user-install systemd-user-enable systemd-user-disable nvim-plugin-install nvim-plugin-pack install-no-systemd setup-wizard deploy deploy-dry docker-build-deploy-test test-deploy
 
 help:
 	@echo "Targets:"
@@ -56,10 +57,14 @@ help:
 	@echo "  test-integration - run integration tests"
 	@echo "  test-install-docker - installer tests in Docker (no systemd)"
 	@echo "  test-install-docker-systemd - installer tests in Docker with real systemd (privileged)"
-	@echo "  systemd-user-install - install user unit + venv + scripts + config"
+	@echo "  service-install      - install the per-user service"
+	@echo "  service-update       - update the installed service from Git"
+	@echo "  service-reset        - recreate managed installation artifacts"
+	@echo "  service-uninstall    - uninstall the per-user service"
+	@echo "  systemd-user-install - compatibility alias for service-install"
 	@echo "  systemd-user-enable  - enable & start rclipboard.service"
 	@echo "  systemd-user-disable - disable rclipboard.service"
-	@echo "  install-no-systemd   - install venv, scripts, config (no systemd)"
+	@echo "  install-no-systemd   - install service definitions without activating them"
 	@echo "  setup-wizard         - run interactive rclipboard configuration wizard"
 	@echo "  deploy               - deploy to all hosts in deploy/hosts"
 	@echo "  deploy-dry           - dry-run deploy (print commands only)"
@@ -294,8 +299,20 @@ test-deploy:
 	PYTHONPATH=src RCLIPBOARD_DEPLOY_TEST_IMAGE=$(DEPLOY_TEST_IMAGE) \
 	.venv/bin/python -m unittest tests.test_integration_deploy -v
 
-systemd-user-install:
-	REPO_DIR="$(CURDIR)" ./scripts/install-systemd-user.sh
+service-install:
+	./scripts/install.sh
+
+service-update:
+	$(USER_CONFIG_HOME)/rclipboard/bin/rclipboard-update
+
+service-reset:
+	./scripts/install.sh --reset
+
+service-uninstall:
+	$(USER_CONFIG_HOME)/rclipboard/bin/rclipboard-uninstall
+
+systemd-user-install: service-install
+	@echo "systemd-user-install is a compatibility alias for service-install"
 
 systemd-user-enable:
 	systemctl --user enable --now rclipboard.service
@@ -310,7 +327,7 @@ nvim-plugin-pack:
 	cd nvim-rclipboard && luarocks pack nvim-rclipboard-0.1.0-1.rockspec
 
 install-no-systemd:
-	bash scripts/install.sh "$(CURDIR)"
+	./scripts/install.sh --no-start
 
 setup-wizard:
 	~/.config/rclipboard/bin/rclipboard-setup

@@ -1123,6 +1123,147 @@ class LaunchdAdapterTests(unittest.TestCase):
         self.assertFalse(self.launchctl_log.exists())
 
 
+class LegacyEntryPointTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.tmp_path = Path(self._tmp.name)
+        self.home = self.tmp_path / "home"
+        self.fake_bin = self.tmp_path / "fake-bin"
+        self.entry_dir = self.tmp_path / "legacy-entry"
+        self.home.mkdir()
+        self.fake_bin.mkdir()
+        self.entry_dir.mkdir()
+        self.systemctl_log = _make_fake_systemctl(self.fake_bin)
+        _make_fake_python(self.fake_bin)
+        self.legacy_entry = self.entry_dir / "install-systemd-user.sh"
+        shutil.copy2(
+            ROOT_DIR / "scripts/install-systemd-user.sh",
+            self.legacy_entry,
+        )
+
+    def tearDown(self) -> None:
+        self._tmp.cleanup()
+
+    def test_positional_checkout_delegates_to_unified_installer(self) -> None:
+        env = os.environ.copy()
+        env.update(
+            {
+                "HOME": str(self.home),
+                "PATH": f"{self.fake_bin}:{env['PATH']}",
+                "PYTHON_BIN": str(self.fake_bin / "python3"),
+                "SYSTEMCTL_BIN": str(self.fake_bin / "systemctl"),
+                "RCLIPBOARD_INSTALL_SKIP_PIP": "1",
+                "RCLIPBOARD_INSTALL_UNAME": "Linux",
+            }
+        )
+
+        result = subprocess.run(
+            ["bash", str(self.legacy_entry), str(ROOT_DIR)],
+            cwd=self.entry_dir,
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("deprecated", result.stderr.lower())
+        app_dir = self.home / ".config/rclipboard"
+        self.assertTrue((app_dir / "install.conf").exists())
+        self.assertEqual(
+            _read_metadata(app_dir / "install.conf")["repo_dir"],
+            str(ROOT_DIR),
+        )
+        self.assertIn(
+            "--user enable --now rclipboard.service",
+            self.systemctl_log.read_text(),
+        )
+
+    def test_legacy_entry_point_contains_no_installation_implementation(self) -> None:
+        source = (ROOT_DIR / "scripts/install-systemd-user.sh").read_text()
+        self.assertNotIn(" -m venv ", source)
+        self.assertNotIn("copy_executable", source)
+        self.assertNotIn("service_install", source)
+        self.assertNotIn("rclipboard.service", source)
+        self.assertLessEqual(len(source.splitlines()), 10)
+
+
+class InstallerBuildEntryPointTests(unittest.TestCase):
+    @staticmethod
+    def _recipe(makefile: str, target: str) -> list[str]:
+        lines = makefile.splitlines()
+        start = next(
+            index + 1
+            for index, line in enumerate(lines)
+            if line.startswith(f"{target}:")
+        )
+        recipe: list[str] = []
+        for line in lines[start:]:
+            if line.startswith("\t"):
+                recipe.append(line[1:])
+            elif not line.strip():
+                if recipe:
+                    break
+            else:
+                break
+        return recipe
+
+    def test_make_exposes_platform_neutral_service_lifecycle_targets(self) -> None:
+        makefile = (ROOT_DIR / "Makefile").read_text()
+        self.assertIn(
+            "USER_CONFIG_HOME := $(if $(XDG_CONFIG_HOME),$(XDG_CONFIG_HOME),$(HOME)/.config)",
+            makefile,
+        )
+        self.assertEqual(self._recipe(makefile, "service-install"), ["./scripts/install.sh"])
+        self.assertEqual(
+            self._recipe(makefile, "service-update"),
+            ["$(USER_CONFIG_HOME)/rclipboard/bin/rclipboard-update"],
+        )
+        self.assertEqual(
+            self._recipe(makefile, "service-reset"),
+            ["./scripts/install.sh --reset"],
+        )
+        self.assertEqual(
+            self._recipe(makefile, "service-uninstall"),
+            ["$(USER_CONFIG_HOME)/rclipboard/bin/rclipboard-uninstall"],
+        )
+        self.assertEqual(
+            self._recipe(makefile, "systemd-user-install"),
+            ['@echo "systemd-user-install is a compatibility alias for service-install"'],
+        )
+        self.assertIn("systemd-user-install: service-install", makefile)
+        self.assertEqual(
+            self._recipe(makefile, "install-no-systemd"),
+            ["./scripts/install.sh --no-start"],
+        )
+        self.assertIn("install: .venv", makefile)
+
+    def test_installer_dockerfiles_create_updateable_git_checkouts(self) -> None:
+        for name in ("Dockerfile", "Dockerfile.systemd"):
+            with self.subTest(name=name):
+                source = (ROOT_DIR / "docker/test-install" / name).read_text()
+                self.assertRegex(source, r"apt-get install[^\n]*(?:\\\n[^\n]*)*\bgit\b")
+                self.assertIn("git init -b main", source)
+                self.assertIn("git config user.name 'Installer Test'", source)
+                self.assertIn("git config user.email 'installer@example.invalid'", source)
+                self.assertIn("git add .", source)
+                self.assertIn("git commit -m fixture", source)
+                self.assertIn("git remote add origin .", source)
+
+    def test_deploy_integration_fixture_provides_installer_git_prerequisite(self) -> None:
+        source = (ROOT_DIR / "tests/docker/deploy/Dockerfile").read_text()
+        self.assertRegex(source, r"apt-get install[^\n]*(?:\\\n[^\n]*)*\bgit\b")
+
+    def test_real_systemd_harness_uses_unified_autostart_and_lifecycle_commands(self) -> None:
+        source = (ROOT_DIR / "docker/test-install/systemd-test.sh").read_text()
+        self.assertIn("scripts/install.sh", source)
+        self.assertNotIn("install-systemd-user.sh", source)
+        self.assertNotIn("systemctl --user start rclipboard.service", source)
+        self.assertIn("rclipboard-update", source)
+        self.assertIn("rclipboard-uninstall", source)
+        self.assertIn("--unix-socket", source)
+        self.assertIn("systemctl --user stop rclipboard.service", source)
+
+
 class UnifiedInstallTests(unittest.TestCase):
     def setUp(self) -> None:
         self._tmp = tempfile.TemporaryDirectory()

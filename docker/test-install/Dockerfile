@@ -8,7 +8,7 @@ FROM ubuntu:26.04
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-        bash python3 python3-venv ca-certificates \
+        bash python3 python3-venv ca-certificates git \
     && rm -rf /var/lib/apt/lists/*
 
 RUN useradd -m -s /bin/bash tester
@@ -16,6 +16,13 @@ USER tester
 WORKDIR /home/tester/rclipboard
 
 COPY --chown=tester:tester . .
+
+RUN git init -b main \
+    && git config user.name 'Installer Test' \
+    && git config user.email 'installer@example.invalid' \
+    && git add . \
+    && git commit -m fixture \
+    && git remote add origin .
 
 # The suite runs `rclipboard config env` via sys.executable — the package
 # and its deps must be importable by the interpreter running the tests.
