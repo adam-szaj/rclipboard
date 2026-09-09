@@ -36,78 +36,44 @@ The current API contract is described in [docs/api-contract.md](docs/api-contrac
 
 ## Installation
 
-Requirements:
-
-- Python 3.11+
-- `uvicorn`
-- `fastapi`
-- `websockets`
-
-Minimal installation:
+The user-service installer supports Linux (`systemd --user`) and macOS
+(`launchd`). It requires Python 3.11+, Git, Bash, and a Git checkout with an
+attached branch. From the repository root:
 
 ```bash
-python -m pip install fastapi uvicorn websockets
+./scripts/install.sh
 ```
 
-Or through the existing project environment:
+Installation is private to the current user and defaults to a Unix Domain
+Socket. Use `./scripts/install.sh --transport tcp` only when an SSH setup cannot
+forward UDS; the TCP listener binds to `127.0.0.1:8989`. The installed
+layout is `${XDG_CONFIG_HOME:-$HOME/.config}/rclipboard`; add its `bin/`
+directory to `PATH` to use the installed commands.
 
 ```bash
-.venv/bin/pip install -e .
+# Service status
+systemctl --user status rclipboard.service                         # Linux
+launchctl print gui/$(id -u)/com.rclipboard.service                # macOS
+
+# Lifecycle
+rclipboard-update [--remote REMOTE] [--branch BRANCH]
+./scripts/install.sh --reset [--purge-user-data]
+rclipboard-uninstall [--purge-user-data]
 ```
 
-## `systemd --user` Installation
+Update is clean-worktree and fast-forward-only. Reset and uninstall preserve
+`config.toml` and key files unless purge is requested and the user types the
+literal lowercase `yes` through an interactive terminal.
 
-The installer prepares a local layout in:
-
-- `~/.config/rclipboard/bin`
-- `~/.config/rclipboard/venv`
-- `~/.config/rclipboard/env`
-
-and copies unit files into:
-
-- `~/.config/systemd/user`
-
-Run the installer:
-
-```bash
-./scripts/install-systemd-user.sh
-```
-
-After installation:
-
-- CLI scripts are available in `~/.config/rclipboard/bin`
-- the dedicated Python environment is in `~/.config/rclipboard/venv`
-- `systemd --user` units use that venv
-- both the server and `rclipctl` read the same `~/.config/rclipboard/env`
-
-If you want to use the scripts directly, add this to `PATH`:
-
-```bash
-export PATH="$HOME/.config/rclipboard/bin:$PATH"
-```
-
-Example service start-up:
-
-```bash
-systemctl --user daemon-reload
-systemctl --user enable --now rclipboard.service
-```
-
-Proxy variant:
-
-```bash
-systemctl --user enable --now rclipboard-proxy.service
-```
-
-Socket-activated variant:
-
-```bash
-systemctl --user enable --now rclipboard.socket
-```
+See [docs/INSTALL.md](docs/INSTALL.md) for requirements, installed paths and
+`PATH`, Linux/macOS status and logs, safe update rules, reset/uninstall behavior,
+and the exact confirmation required before configuration or keys can be
+deleted.
 
 ## Running
 
-Preferred local launcher:
+The user service installed above uses the private UDS configuration by default.
+For manual development runs, the server can instead be started on loopback TCP:
 
 ```bash
 RCLIPBOARD_ENDPOINT=127.0.0.1:8989 .venv/bin/rclipboard
@@ -138,11 +104,15 @@ PYTHONPATH=src .venv/bin/python -m uvicorn rclipboard.main:app \
 
 ## Quick CLI Start
 
-`rclipctl` reads configuration from `RCLIP_CONF` or, by default, from
-`~/.config/rclipboard/env`. The most important variable is:
+`rclipctl` reads the installed `config.toml` and the private generated runtime
+environment. A new service installation uses:
 
-```bash
-RCLIPBOARD_ENDPOINT=127.0.0.1:8989
+```toml
+[server]
+endpoint = "uds://${XDG_RUNTIME_DIR}/rclipboard/uds.sock"
+
+[client]
+transport = "uds"
 ```
 
 Accepted formats:
@@ -152,52 +122,51 @@ Accepted formats:
 - `https://host:port`
 - `uds:///run/user/1000/rclipboard.sock`
 
-Client-side transport selection:
+Client-side transport selection can be overridden explicitly:
 
-- default order: `uds`, then `tcp`
 - env override: `RCLIPCTL_TRANSPORT=auto|uds|tcp`
 - CLI override: `--transport auto|uds|tcp`
 
 Health:
 
 ```bash
-./scripts/rclipctl health --endpoint 127.0.0.1:8989
+rclipctl health
 ```
 
 Put:
 
 ```bash
-echo -n 'hello' | ./scripts/rclipctl put -c --endpoint 127.0.0.1:8989
+echo -n 'hello' | rclipctl put -c
 ```
 
 Get in JSON format:
 
 ```bash
-./scripts/rclipctl get -c --json --endpoint 127.0.0.1:8989 | jq .
+rclipctl get -c --json | jq .
 ```
 
 Get as hex:
 
 ```bash
-./scripts/rclipctl get -c --encoding hex --endpoint 127.0.0.1:8989
+rclipctl get -c --encoding hex
 ```
 
 List topics:
 
 ```bash
-./scripts/rclipctl topics --endpoint 127.0.0.1:8989 | jq .
+rclipctl topics | jq .
 ```
 
 Encrypt and send:
 
 ```bash
-echo -n 'secret' | ./scripts/bin/rclipctl put --encrypt -c --endpoint 127.0.0.1:8989
+echo -n 'secret' | rclipctl put --encrypt -c
 ```
 
 Receive and decrypt (opt-in):
 
 ```bash
-./scripts/bin/rclipctl get -c --decrypt --endpoint 127.0.0.1:8989
+rclipctl get -c --decrypt
 ```
 
 Use `exec` as a stdio encryption pipe (no server communication):
@@ -582,9 +551,10 @@ rcliptunel \
 ### TOML configuration
 
 `rcliptunel` reads the same `config.toml` as the server when `--config` is
-given, or sources `~/.config/rclipboard/env` when that file exists.  The relevant
-fields are `server.endpoint` (used as the default `--local` value) and the proxy
-`upstream_endpoint` port (used as the default `--remote` TCP port).
+given, or sources the private generated environment below
+`${XDG_RUNTIME_DIR:-$HOME/.local/run}/rclipboard/env` when it exists. The
+relevant fields are `server.endpoint` (used as the default `--local` value) and
+the proxy `upstream_endpoint` port (used as the default `--remote` TCP port).
 
 ## Makefile
 
@@ -667,41 +637,10 @@ fan-out triggered by `clip.put`. Topic state is updated immediately, but the
 broadcast may be delayed and coalesced to the latest value. `clip.get` flushes
 any pending notification for the requested topic before returning.
 
-`rclipctl` chooses transports in this order by default: HTTP over UDS, then
-HTTP over TCP. You can force one of them via `RCLIPCTL_TRANSPORT` in the env
-file or `--transport` on the command line.
-
-## systemd
-
-Install unit files:
-
-```bash
-make systemd-user-install
-```
-
-Start the regular service:
-
-```bash
-systemctl --user enable --now rclipboard.service
-```
-
-Start socket activation for UDS:
-
-```bash
-systemctl --user enable --now rclipboard.socket
-```
-
-Start the proxy variant:
-
-```bash
-systemctl --user enable --now rclipboard-proxy.service
-```
-
-`systemd --user` installation layout:
-
-- `~/.config/rclipboard/bin` contains the executable scripts
-- `~/.config/rclipboard/venv` contains the dedicated Python environment
-- units use `ExecStart=%h/.config/rclipboard/venv/bin/rclipboard`
+The installed configuration selects HTTP over UDS without automatic TCP
+fallback. TCP can be selected explicitly via configuration or `--transport` on
+the command line. See [docs/INSTALL.md](docs/INSTALL.md) for the private service
+transport policy.
 
 ## Notes
 

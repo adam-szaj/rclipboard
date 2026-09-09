@@ -461,6 +461,88 @@ def _run_config_env(config: Path) -> str:
 # ── layout + units ───────────────────────────────────────────────────────────
 
 
+class DocumentationContractTests(unittest.TestCase):
+    def test_install_guide_has_required_sections_in_order(self) -> None:
+        text = (ROOT_DIR / "docs/INSTALL.md").read_text()
+        sections = (
+            "Requirements",
+            "Install from a Git checkout",
+            "Installed layout and PATH",
+            "Linux systemd user service",
+            "macOS LaunchAgent",
+            "Default UDS transport",
+            "Loopback TCP fallback for SSH tunneling",
+            "Update remote and branch",
+            "Reset installation",
+            "Uninstall",
+            "Configuration/key deletion safeguard",
+            "Troubleshooting",
+            "Real macOS smoke procedure",
+        )
+        positions = [text.index(f"## {section}") for section in sections]
+        self.assertEqual(positions, sorted(positions))
+
+    def test_install_guide_documents_lifecycle_and_transport_contract(self) -> None:
+        text = (ROOT_DIR / "docs/INSTALL.md").read_text()
+        normalized = " ".join(text.split())
+        for required in (
+            "./scripts/install.sh",
+            "./scripts/install.sh --no-start",
+            "./scripts/install.sh --transport tcp",
+            "rclipboard-update [--remote REMOTE] [--branch BRANCH]",
+            "./scripts/install.sh --reset [--purge-user-data]",
+            "rclipboard-uninstall [--purge-user-data]",
+            "127.0.0.1:8989",
+            "systemctl --user status rclipboard.service",
+            "launchctl print gui/$(id -u)/com.rclipboard.service",
+            "~/Library/Logs/rclipboard/stdout.log",
+            "~/Library/Logs/rclipboard/stderr.log",
+            "config.toml",
+            "age_key.txt",
+            "age_key.pub",
+            "known_keys",
+            "literal lowercase `yes`",
+        ):
+            self.assertIn(required, normalized)
+        self.assertIn("no automatic UDS-to-TCP fallback", normalized)
+        self.assertIn("does not rewrite an existing `config.toml`", normalized)
+
+    def test_install_guide_documents_update_safety_and_platform_limits(self) -> None:
+        text = (ROOT_DIR / "docs/INSTALL.md").read_text()
+        normalized = " ".join(text.split())
+        for required in (
+            "attached selected branch",
+            "completely clean worktree",
+            "fast-forward only",
+            "does not stash, rebase, reset, or switch branches",
+            "`origin`",
+            "checkout was updated but installation refresh failed",
+            "server service only",
+            "no native macOS clipboard synchronization",
+            "xsel publisher remains Linux/X11-only",
+            "required before claiming real launchd validation",
+            "has not been run as part of the Linux automated test suite",
+        ):
+            self.assertIn(required, normalized)
+
+    def test_primary_docs_do_not_advertise_stale_service_layout(self) -> None:
+        readme = (ROOT_DIR / "README.md").read_text()
+        configure = (ROOT_DIR / "docs/CONFIGURE.md").read_text()
+        install = (ROOT_DIR / "docs/INSTALL.md").read_text()
+        combined = readme + configure + install
+        for stale in (
+            "rclipboard.socket",
+            "rclipboard-proxy.service",
+            "~/.local/bin/rclipctl",
+            "~/.config/rclipboard/env",
+            "./scripts/rclipctl",
+            "./scripts/install-systemd-user.sh",
+        ):
+            self.assertNotIn(stale, combined)
+        self.assertIn("docs/INSTALL.md", readme)
+        self.assertIn("INSTALL.md", configure)
+
+
 class InstallerConfigTests(unittest.TestCase):
     def test_config_examples_are_identical(self) -> None:
         canonical = ROOT_DIR / "scripts/config/rclipboard.conf.example"

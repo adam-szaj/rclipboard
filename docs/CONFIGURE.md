@@ -1,8 +1,12 @@
 # rclipboard — Configuration Guide
 
-All configuration lives in `~/.config/rclipboard/config.toml`.  
-The server reads it at startup via `ExecStartPre` (systemd) or directly when invoked with `rclipboard config env`.  
-Every TOML field has an equivalent environment variable — env always wins.
+The user-service installer stores configuration at
+`${XDG_CONFIG_HOME:-$HOME/.config}/rclipboard/config.toml`. The shared service
+runner passes that absolute path to the server and renders a private runtime
+environment for shell clients. Environment variables override TOML settings.
+
+See [INSTALL.md](INSTALL.md) for the complete Linux/macOS installation, update,
+reset, uninstall, and data-deletion contract.
 
 ---
 
@@ -10,58 +14,74 @@ Every TOML field has an equivalent environment variable — env always wins.
 
 ### 1. Local single-machine (minimal)
 
-The simplest setup: one server, TCP on localhost, no proxy, no encryption.
+The safe default is one server on a private Unix Domain Socket, with no proxy or
+clipboard publisher.
 
 **Install**
 
 ```bash
-make systemd-user-install      # or: ./scripts/install-systemd-user.sh
+./scripts/install.sh
 ```
 
 This creates:
-- `~/.config/rclipboard/venv/` — Python venv with the `rclipboard` package
-- `~/.config/rclipboard/config.toml` — starter config (from `scripts/systemd/user/rclipboard.conf.example`)
-- `~/.config/systemd/user/rclipboard.service`
-- `~/.local/bin/rclipctl`, `rcliptunel` — CLI tools
+
+- a private application directory below
+  `${XDG_CONFIG_HOME:-$HOME/.config}/rclipboard`;
+- a dedicated Python environment and installed commands;
+- `config.toml`, initialized only when it does not already exist;
+- a systemd user service on Linux or a per-user LaunchAgent on macOS.
 
 **config.toml**
 
 ```toml
 [server]
-endpoint = "127.0.0.1:8989"
-log_level = "warning"
-```
-
-**Start**
-
-```bash
-systemctl --user enable --now rclipboard.service
-systemctl --user status rclipboard.service
-```
-
-**Verify**
-
-```bash
-rclipctl health
-echo "hello" | rclipctl put
-rclipctl get
-```
-
----
-
-### 2. Unix Domain Socket (low-latency local)
-
-Replaces TCP with a UDS for lower overhead when all clients are local.
-
-```toml
-[server]
 endpoint = "uds://${XDG_RUNTIME_DIR}/rclipboard/uds.sock"
+log_level = "warning"
 
 [client]
 transport = "uds"
 ```
 
-`rclipctl` picks up the UDS endpoint automatically via config.
+**Verify and restart after configuration changes**
+
+```bash
+rclipctl health
+
+# Linux
+systemctl --user status rclipboard.service
+systemctl --user restart rclipboard.service
+
+# macOS
+launchctl print gui/$(id -u)/com.rclipboard.service
+launchctl kickstart -k gui/$(id -u)/com.rclipboard.service
+```
+
+---
+
+### 2. Loopback TCP fallback for SSH tunneling
+
+If SSH cannot forward a UDS, create the initial configuration with explicit
+loopback TCP:
+
+```bash
+./scripts/install.sh --transport tcp
+```
+
+Its equivalent configuration is:
+
+```toml
+[server]
+endpoint = "127.0.0.1:8989"
+
+[client]
+transport = "tcp"
+endpoint = "127.0.0.1:8989"
+```
+
+The listener is bound only to `127.0.0.1:8989`, suitable for an SSH `-L`
+forward; it is not exposed on non-loopback interfaces. There is no automatic
+UDS-to-TCP fallback. A later `--transport` option does not overwrite an existing
+configuration; edit `config.toml` and restart the service explicitly.
 
 ---
 
@@ -170,7 +190,7 @@ rclipctl proxy-connect --endpoint upstream-host:8989 --token <ADMIN_TOKEN>
 rclipctl proxy-disconnect --token <ADMIN_TOKEN>
 ```
 
-**Proxy with SSH tunnel** — see Scenario 8.
+**Proxy with SSH tunnel** — see Scenario 7.
 
 **Lazy sync** (large payloads):
 
@@ -342,7 +362,7 @@ docker compose up
 
 ```toml
 [server]
-endpoint            = "127.0.0.1:8989"   # host:port | uds://path | https://...
+endpoint            = "uds://${XDG_RUNTIME_DIR}/rclipboard/uds.sock"
 raw_uds_path        = ""                  # JSON-RPC 2.0 NDJSON socket (empty = disabled)
 log_level           = "warning"           # debug | info | warning | error
 py_log_level        = "WARNING"
@@ -370,7 +390,7 @@ keyfile             = ""
 keyfile_password    = ""
 
 [client]
-transport           = ""                  # auto | tcp | uds (for rclipctl)
+transport           = "uds"               # auto | tcp | uds (for rclipctl)
 endpoint            = ""                  # override rclipctl target endpoint
 
 [encryption]
@@ -388,7 +408,7 @@ All env vars override their config.toml equivalents.
 
 | Variable | config.toml equivalent | Default |
 |---|---|---|
-| `RCLIPBOARD_ENDPOINT` | `server.endpoint` | `127.0.0.1:8989` |
+| `RCLIPBOARD_ENDPOINT` | `server.endpoint` | `127.0.0.1:8989` built-in; installed config uses UDS |
 | `RCLIPBOARD_RAW_UDS_PATH` | `server.raw_uds_path` | — |
 | `RCLIPBOARD_LOG_LEVEL` | `server.log_level` | `warning` |
 | `RCLIPBOARD_PY_LOG_LEVEL` | `server.py_log_level` | `WARNING` |
