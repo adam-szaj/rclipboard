@@ -130,7 +130,10 @@ if [ "$cmd" = "exec" ]; then
         require_age
         raw_output=$("${exec_wrapped[@]}") || { ec=$?; exit $ec; }
         [ -z "$raw_output" ] && exit 0
-        mapfile -t _recipients < <(build_age_recipients)
+        _recipients=()
+        while IFS= read -r recipient; do
+            _recipients+=("$recipient")
+        done < <(build_age_recipients)
         printf '%s' "$raw_output" | age "${_recipients[@]}" | base64 -w 0
         exit $?
     fi

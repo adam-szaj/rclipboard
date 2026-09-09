@@ -7,16 +7,20 @@ set -euo pipefail
 APP_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/rclipboard"
 WIZARD_DIR="$(cd "$(dirname "$0")" && pwd)"
 GENCERT="${WIZARD_DIR}/gencert.sh"
+PLATFORM="$(uname -s 2>/dev/null || printf 'unknown')"
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 
 # prompt_yn "Question" "y|n"  →  returns 0=yes 1=no
 prompt_yn() {
     local q="$1" def="$2" reply hint
-    [[ "$def" == "y" ]] && hint="(Y/n)" || hint="(y/N)"
+    [ "$def" = "y" ] && hint="(Y/n)" || hint="(y/N)"
     read -r -p "$q $hint: " reply || true
     reply="${reply:-$def}"
-    [[ "${reply,,}" == "y" ]]
+    case "$reply" in
+        y|Y) return 0 ;;
+        *)   return 1 ;;
+    esac
 }
 
 # prompt_val "Prompt" "default"  →  prints chosen value
@@ -31,6 +35,7 @@ section() { echo; echo "── $* ───────────────�
 # ── state defaults ────────────────────────────────────────────────────────────
 SERVER_ENDPOINT='uds://${XDG_RUNTIME_DIR}/rclipboard/uds.sock'
 CLIENT_TRANSPORT="uds"
+CLIENT_ENDPOINT=""
 DO_TLS=0
 
 XSEL_ENABLED="false"
@@ -57,17 +62,22 @@ mkdir -p "$APP_DIR"
 # ── Step 1: Transport ─────────────────────────────────────────────────────────
 section "Step 1: Transport / Endpoint"
 echo "  1) UDS   – Unix Domain Socket (recommended for local use)"
-echo "  2) TCP   – plain TCP (host:port)"
+echo "  2) TCP   – loopback 127.0.0.1:8989 (SSH fallback)"
 echo "  3) HTTPS – TCP with TLS"
 read -r -p "Choice [1]: " _choice || true
 _choice="${_choice:-1}"
 
 case "$_choice" in
     2)
-        _host=$(prompt_val "Host" "127.0.0.1")
+        _host=$(prompt_val "Host (loopback only)" "127.0.0.1")
         _port=$(prompt_val "Port" "8989")
+        if [ "$_host" != "127.0.0.1" ] || [ "$_port" != "8989" ]; then
+            echo "error: TCP fallback is fixed at 127.0.0.1:8989" >&2
+            exit 2
+        fi
         SERVER_ENDPOINT="${_host}:${_port}"
         CLIENT_TRANSPORT="tcp"
+        CLIENT_ENDPOINT="127.0.0.1:8989"
         DO_TLS=0
         ;;
     3)
@@ -75,11 +85,13 @@ case "$_choice" in
         _port=$(prompt_val "Port" "8989")
         SERVER_ENDPOINT="https://${_host}:${_port}"
         CLIENT_TRANSPORT="tcp"
+        CLIENT_ENDPOINT=""
         DO_TLS=1
         ;;
     *)
         SERVER_ENDPOINT='uds://${XDG_RUNTIME_DIR}/rclipboard/uds.sock'
         CLIENT_TRANSPORT="uds"
+        CLIENT_ENDPOINT=""
         DO_TLS=0
         ;;
 esac
@@ -87,20 +99,24 @@ echo "  Endpoint: $SERVER_ENDPOINT"
 
 # ── Step 2: xsel ─────────────────────────────────────────────────────────────
 section "Step 2: X11 clipboard integration (xsel)"
-if command -v xsel >/dev/null 2>&1; then
-    _xsel_default="y"
-    echo "  xsel found in PATH."
+if [ "$PLATFORM" = "Darwin" ]; then
+    echo "  xsel integration is unavailable on macOS."
 else
-    _xsel_default="n"
-    echo "  xsel not found in PATH."
-fi
+    if command -v xsel >/dev/null 2>&1; then
+        _xsel_default="y"
+        echo "  xsel found in PATH."
+    else
+        _xsel_default="n"
+        echo "  xsel not found in PATH."
+    fi
 
-if prompt_yn "Enable xsel X11 clipboard polling?" "$_xsel_default"; then
-    XSEL_ENABLED="true"
-    XSEL_PATH=$(prompt_val "xsel binary path" "/usr/bin/xsel")
-    XSEL_INTERVAL=$(prompt_val "Poll interval (ms)" "250")
-    if prompt_yn "  Encrypt X11 clipboard data via rclipctl exec? (requires age + registered keys)" "n"; then
-        XSEL_ENCRYPT="true"
+    if prompt_yn "Enable xsel X11 clipboard polling?" "$_xsel_default"; then
+        XSEL_ENABLED="true"
+        XSEL_PATH=$(prompt_val "xsel binary path" "/usr/bin/xsel")
+        XSEL_INTERVAL=$(prompt_val "Poll interval (ms)" "250")
+        if prompt_yn "  Encrypt X11 clipboard data via rclipctl exec? (requires age + registered keys)" "n"; then
+            XSEL_ENCRYPT="true"
+        fi
     fi
 fi
 
@@ -215,6 +231,11 @@ else
     _proxy_upstream_line="    # upstream_endpoint = \"\""
 fi
 
+_client_endpoint_line=""
+if [ -n "$CLIENT_ENDPOINT" ]; then
+    _client_endpoint_line="    endpoint = \"$CLIENT_ENDPOINT\""
+fi
+
 _do_write=1
 CONF_FILE="$APP_DIR/config.toml"
 if [ -f "$CONF_FILE" ]; then
@@ -251,6 +272,7 @@ $_proxy_upstream_line
 
 [client]
     transport = "$CLIENT_TRANSPORT"
+$_client_endpoint_line
 EOF
 )
 
@@ -283,7 +305,6 @@ echo "  Proxy:      $PROXY_ENABLED"
 echo "  Admin token: $([ -n "$ADMIN_TOKEN" ] && echo "set" || echo "not set")"
 echo
 echo "Next steps:"
-echo "  Start server:          ~/.config/rclipboard/venv/bin/rclipboard"
-echo "  Test connectivity:     rclipctl health"
-echo "  Shell integration:     source ~/.bash.d/rclipboard.bash  (add to ~/.bashrc)"
-echo "  Add ~/bin to PATH:     export PATH=\"\$HOME/bin:\$PATH\""
+echo "  Start server:          $APP_DIR/bin/rclipboard-launcher daemonize"
+echo "  Test connectivity:     $APP_DIR/bin/rclipctl health"
+echo "  Add to PATH:           export PATH=\"$APP_DIR/bin:\$PATH\""

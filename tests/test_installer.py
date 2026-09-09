@@ -39,6 +39,9 @@ EXPECTED_PUBLIC_SCRIPTS = {
     "rclipboard-uninstall",
 }
 EXPECTED_SCRIPTS = sorted(EXPECTED_PUBLIC_SCRIPTS)
+INSTALLED_SOURCE_SCRIPTS = [
+    ROOT_DIR / "scripts" / "bin" / name for name in EXPECTED_SCRIPTS
+]
 
 EXPECTED_INSTALLER_FILES = {
     "install.sh",
@@ -479,6 +482,185 @@ class InstallerConfigTests(unittest.TestCase):
         self.assertEqual(data["client"]["transport"], "uds")
         self.assertFalse(data["proxy"]["enabled"])
         self.assertFalse(data["xsel"]["enabled"])
+
+
+class HelperPortabilityTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        tmp_path = Path(self._tmp.name)
+        self.home = tmp_path / "home"
+        self.xdg_config = tmp_path / "config root"
+        self.fake_bin = tmp_path / "fake-bin"
+        self.home.mkdir()
+        self.fake_bin.mkdir()
+        self.app_dir = self.xdg_config / "rclipboard"
+
+    def tearDown(self) -> None:
+        self._tmp.cleanup()
+
+    def _run_wizard(
+        self,
+        input_text: str,
+        *,
+        platform: str | None = None,
+        xsel_available: bool = False,
+    ) -> subprocess.CompletedProcess[str]:
+        if platform is not None:
+            uname = self.fake_bin / "uname"
+            uname.write_text(f"#!/bin/sh\nprintf '%s\\n' {platform!r}\n")
+            uname.chmod(0o755)
+        if xsel_available:
+            xsel = self.fake_bin / "xsel"
+            xsel.write_text("#!/bin/sh\nexit 0\n")
+            xsel.chmod(0o755)
+        env = os.environ.copy()
+        env.update(
+            {
+                "HOME": str(self.home),
+                "XDG_CONFIG_HOME": str(self.xdg_config),
+                "PATH": f"{self.fake_bin}:{env['PATH']}",
+            }
+        )
+        return subprocess.run(
+            ["bash", str(ROOT_DIR / "scripts/bin/rclipboard-setup")],
+            input=input_text,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+
+    def test_installed_scripts_avoid_known_bash4_only_constructs(self) -> None:
+        for path in INSTALLED_SOURCE_SCRIPTS:
+            with self.subTest(script=path.name):
+                text = path.read_text()
+                self.assertNotRegex(text, r"\$\{[^}]+,,\}")
+                self.assertNotIn("declare -A", text)
+                self.assertNotIn("mapfile", text)
+
+    def test_launcher_does_not_require_realpath(self) -> None:
+        text = (ROOT_DIR / "scripts/bin/rclipboard-launcher").read_text()
+        self.assertNotIn("realpath", text)
+        self.assertIn("rclipboard-service-run", text)
+
+    def test_launcher_delegates_to_canonical_xdg_runner(self) -> None:
+        runner = self.app_dir / "bin/rclipboard-service-run"
+        runner.parent.mkdir(parents=True)
+        run_log = self.home / "runner.log"
+        runner.write_text(
+            "#!/bin/sh\n"
+            "printf '%s\\n' \"$0|$*\" > \"$RUN_LOG\"\n"
+        )
+        runner.chmod(0o755)
+
+        result = subprocess.run(
+            ["bash", str(ROOT_DIR / "scripts/bin/rclipboard-launcher")],
+            env={
+                **os.environ,
+                "HOME": str(self.home),
+                "XDG_CONFIG_HOME": str(self.xdg_config),
+                "RUN_LOG": str(run_log),
+            },
+            capture_output=True,
+            text=True,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(run_log.is_file(), result.stderr)
+        self.assertEqual(run_log.read_text(), f"{runner}|\n")
+
+    def test_launcher_daemonize_returns_while_runner_continues_once(self) -> None:
+        runner = self.app_dir / "bin/rclipboard-service-run"
+        runner.parent.mkdir(parents=True)
+        run_log = self.home / "daemon.log"
+        runner.write_text(
+            "#!/bin/sh\n"
+            "printf 'started\\n' >> \"$RUN_LOG\"\n"
+            "sleep 3\n"
+        )
+        runner.chmod(0o755)
+
+        started = time.monotonic()
+        result = subprocess.run(
+            [
+                "bash",
+                str(ROOT_DIR / "scripts/bin/rclipboard-launcher"),
+                "daemonize",
+            ],
+            env={
+                **os.environ,
+                "HOME": str(self.home),
+                "XDG_CONFIG_HOME": str(self.xdg_config),
+                "RUN_LOG": str(run_log),
+            },
+            capture_output=True,
+            text=True,
+            timeout=1,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertLess(time.monotonic() - started, 1)
+        deadline = time.monotonic() + 1
+        while not run_log.exists() and time.monotonic() < deadline:
+            time.sleep(0.01)
+        self.assertTrue(run_log.is_file(), result.stderr)
+        self.assertEqual(run_log.read_text(), "started\n")
+
+    def test_wizard_default_choice_writes_canonical_private_uds_config(
+        self,
+    ) -> None:
+        result = self._run_wizard("\nn\nn\nn\nn\n")
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        config_path = self.app_dir / "config.toml"
+        with config_path.open("rb") as file:
+            config = tomllib.load(file)
+        self.assertEqual(
+            config["server"]["endpoint"],
+            "uds://${XDG_RUNTIME_DIR}/rclipboard/uds.sock",
+        )
+        self.assertEqual(config["client"]["transport"], "uds")
+        self.assertNotIn("fifo", config)
+        self.assertIn(str(self.app_dir / "bin"), result.stdout)
+        self.assertNotIn("~/.config/rclipboard", result.stdout)
+
+    def test_wizard_tcp_choice_writes_fixed_loopback_fallback(self) -> None:
+        result = self._run_wizard("2\n\n\nn\nn\nn\nn\n")
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        try:
+            with (self.app_dir / "config.toml").open("rb") as file:
+                config = tomllib.load(file)
+        except tomllib.TOMLDecodeError as error:
+            self.fail(f"wizard wrote invalid TOML: {error}")
+        self.assertEqual(config["server"]["endpoint"], "127.0.0.1:8989")
+        self.assertEqual(config["client"]["transport"], "tcp")
+        self.assertEqual(config["client"]["endpoint"], "127.0.0.1:8989")
+        self.assertNotIn("fifo", config)
+        self.assertIn("SSH", result.stdout)
+
+    def test_wizard_tcp_choice_rejects_non_private_endpoint(self) -> None:
+        for host, port in (("0.0.0.0", "8989"), ("127.0.0.1", "8990")):
+            with self.subTest(host=host, port=port):
+                (self.app_dir / "config.toml").unlink(missing_ok=True)
+                result = self._run_wizard(f"2\n{host}\n{port}\n")
+                self.assertNotEqual(result.returncode, 0)
+                self.assertFalse((self.app_dir / "config.toml").exists())
+
+    def test_wizard_darwin_does_not_enable_xsel_even_when_it_is_available(
+        self,
+    ) -> None:
+        result = self._run_wizard(
+            "\n\n\n\nn\nn\nn\nn\n",
+            platform="Darwin",
+            xsel_available=True,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        with (self.app_dir / "config.toml").open("rb") as file:
+            config = tomllib.load(file)
+        self.assertFalse(config["xsel"]["enabled"])
+        self.assertIn("unavailable", result.stdout.lower())
 
 
 class ServiceRunnerTests(unittest.TestCase):
