@@ -208,5 +208,56 @@ class PasteboardInterfaceTests(unittest.IsolatedAsyncioTestCase):
         process.terminate.assert_called_once_with()
 
 
+class PasteboardLifecycleTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self) -> None:
+        self.app = FastAPI()
+
+    def test_install_registers_and_subscribes_enabled_adapter(self) -> None:
+        conn = mock.Mock(enabled=True)
+        with (
+            mock.patch.object(pasteboard, "PASTEBOARD_ENABLED", True),
+            mock.patch.object(
+                pasteboard, "PasteboardInterface", return_value=conn
+            ),
+            mock.patch.object(pasteboard, "register_client") as register,
+            mock.patch.object(pasteboard, "subscribe_client") as subscribe,
+        ):
+            pasteboard.install_pasteboard(self.app)
+
+        self.assertIs(self.app.state.pasteboard, conn)
+        register.assert_called_once_with(self.app, conn)
+        subscribe.assert_called_once_with(self.app, conn, ["c"])
+
+    def test_install_skips_adapter_when_not_configured(self) -> None:
+        with (
+            mock.patch.object(pasteboard, "PASTEBOARD_ENABLED", False),
+            mock.patch.object(pasteboard, "PasteboardInterface") as adapter,
+        ):
+            pasteboard.install_pasteboard(self.app)
+
+        self.assertIsNone(self.app.state.pasteboard)
+        adapter.assert_not_called()
+
+    async def test_shutdown_stops_installed_adapter(self) -> None:
+        conn = mock.Mock()
+        conn.shutdown = mock.AsyncMock()
+        self.app.state.pasteboard = conn
+
+        await pasteboard.shutdown_pasteboard(self.app)
+
+        conn.shutdown.assert_awaited_once_with()
+
+    def test_status_has_stable_shape_when_adapter_is_disabled(self) -> None:
+        self.app.state.pasteboard = None
+
+        status = pasteboard.get_pasteboard_status(self.app)
+
+        self.assertFalse(status["enabled"])
+        self.assertFalse(status["good"])
+        self.assertEqual(status["topics"], ["c"])
+        self.assertEqual(status["pbcopy_path"], str(pasteboard.PBCOPY_PATH))
+        self.assertEqual(status["pbpaste_path"], str(pasteboard.PBPASTE_PATH))
+
+
 if __name__ == "__main__":
     unittest.main()

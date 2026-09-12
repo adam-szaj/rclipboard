@@ -37,6 +37,7 @@ class SSLHTTPSFunctionalTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertTrue(body["ok"])
         self.assertIn("xsel_enabled", body)
+        self.assertIn("pasteboard_enabled", body)
 
     def test_status_over_https(self):
         status, body = get_json_ssl(
@@ -44,6 +45,7 @@ class SSLHTTPSFunctionalTests(unittest.TestCase):
         )
         self.assertEqual(status, 200)
         self.assertTrue(body["ok"])
+        self.assertIn("pasteboard", body)
 
     def test_clip_put_get_and_topics_list_over_https(self):
         payload = {

@@ -11,7 +11,11 @@ from fastapi import FastAPI
 from pydantic import JsonValue
 
 from rclipboard.core.interfaces import BidirectionalInterface
-from rclipboard.core.state import enqueue_topic_data
+from rclipboard.core.state import (
+    enqueue_topic_data,
+    register_client,
+    subscribe_client,
+)
 from rclipboard.envutil import env_bool
 from rclipboard.log import get_logger
 from rclipboard.models.wire import TopicData, ValueData
@@ -205,3 +209,36 @@ class PasteboardInterface(BidirectionalInterface):
         except a.CancelledError:
             pass
         self.task = None
+
+
+def install_pasteboard(app: FastAPI) -> None:
+    app.state.pasteboard = None
+    if not PASTEBOARD_ENABLED:
+        return
+    conn = PasteboardInterface(app)
+    app.state.pasteboard = conn
+    if not conn.enabled:
+        return
+    register_client(app, conn)
+    subscribe_client(app, conn, [TOPIC])
+
+
+async def shutdown_pasteboard(app: FastAPI) -> None:
+    conn: PasteboardInterface | None = getattr(app.state, "pasteboard", None)
+    if conn is not None:
+        await conn.shutdown()
+
+
+def get_pasteboard_status(app: FastAPI) -> dict[str, JsonValue]:
+    conn: PasteboardInterface | None = getattr(app.state, "pasteboard", None)
+    if conn is not None:
+        return conn.status()
+    return {
+        "enabled": False,
+        "good": False,
+        "pbcopy_path": str(PBCOPY_PATH),
+        "pbpaste_path": str(PBPASTE_PATH),
+        "interval_ms": POLL_INTERVAL_MS,
+        "topics": [TOPIC],
+        "last_error": None,
+    }

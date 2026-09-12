@@ -146,19 +146,24 @@ class AppState:
         self._emit_runtime_state_change("clients")
 
     def get_health(self) -> HealthResult:
+        from rclipboard.transports.pasteboard import get_pasteboard_status
         from rclipboard.transports.proxy import get_proxy_status
         from rclipboard.transports.xsel import get_xsel_status
         xsel = get_xsel_status(self.app)
+        pasteboard = get_pasteboard_status(self.app)
         proxy = get_proxy_status(self.app)
         return HealthResult(
             ok=True,
             xsel_enabled=bool(xsel["enabled"]),
             xsel_good=bool(xsel["good"]),
+            pasteboard_enabled=bool(pasteboard["enabled"]),
+            pasteboard_good=bool(pasteboard["good"]),
             proxy_enabled=bool(proxy["enabled"]),
             proxy_good=bool(proxy["good"]),
         )
 
     def get_status(self, topics: list[str]) -> StatusResult:
+        from rclipboard.transports.pasteboard import get_pasteboard_status
         from rclipboard.transports.proxy import get_proxy_status
         from rclipboard.transports.xsel import get_xsel_status
         clients = [c.name for c in self.clients if isinstance(c, Interface)]
@@ -187,6 +192,7 @@ class AppState:
             topic_status=topic_status,
             clients=clients,
             xsel=get_xsel_status(self.app),
+            pasteboard=get_pasteboard_status(self.app),
             proxy=get_proxy_status(self.app),
         )
 

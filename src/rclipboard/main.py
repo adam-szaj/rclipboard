@@ -8,6 +8,7 @@ from fastapi import FastAPI
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 import rclipboard.transports.http as http_mod
+import rclipboard.transports.pasteboard as pasteboard_mod
 import rclipboard.transports.proxy as proxy_mod
 import rclipboard.transports.uds as uds_mod
 import rclipboard.transports.ws as ws_mod
@@ -35,6 +36,7 @@ async def startup(app: FastAPI):
     # of truth per module), so they are installed unconditionally here.
     uds_mod.install_raw_uds(app)
     xsel_mod.install_xsel(app)
+    pasteboard_mod.install_pasteboard(app)
     proxy_mod.install_proxy(app)
 
 
@@ -50,6 +52,7 @@ async def shutdown(app: FastAPI):
         tg.create_task(proxy_mod.shutdown_proxy(app))
         tg.create_task(uds_mod.shutdown_raw_uds(app))
         tg.create_task(xsel_mod.shutdown_xsel(app))
+        tg.create_task(pasteboard_mod.shutdown_pasteboard(app))
 
     await main.cancel_background_tasks()
     await main.flush_all_notifications()

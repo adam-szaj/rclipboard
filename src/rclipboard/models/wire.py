@@ -138,6 +138,8 @@ class HealthResult(BaseModel):
     ok: bool
     xsel_enabled: bool = False
     xsel_good: bool = False
+    pasteboard_enabled: bool = False
+    pasteboard_good: bool = False
     proxy_enabled: bool = False
     proxy_good: bool = False
 
@@ -170,4 +172,5 @@ class StatusResult(BaseModel):
     topic_status: list[TopicStatus] = Field(default_factory=list)
     clients: list[str] = Field(default_factory=list)
     xsel: dict[str, JsonValue] = Field(default_factory=dict)
+    pasteboard: dict[str, JsonValue] = Field(default_factory=dict)
     proxy: dict[str, JsonValue] = Field(default_factory=dict)

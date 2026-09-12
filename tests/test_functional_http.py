@@ -20,11 +20,14 @@ class FunctionalHTTPTests(unittest.TestCase):
         self.assertTrue(body["ok"])
         self.assertIn("xsel_enabled", body)
         self.assertIn("xsel_good", body)
+        self.assertIn("pasteboard_enabled", body)
+        self.assertIn("pasteboard_good", body)
 
         status, body = get_json(f"http://127.0.0.1:{self.port}/v1/status.get")
         self.assertEqual(status, 200)
         self.assertTrue(body["ok"])
         self.assertIn("xsel", body)
+        self.assertIn("pasteboard", body)
 
         status, body = post_json(f"http://127.0.0.1:{self.port}/v1/topics.list", {})
         self.assertEqual(status, 200)
