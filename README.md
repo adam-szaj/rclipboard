@@ -6,6 +6,7 @@ workflows. It provides:
 - an HTTP API
 - a WebSocket API based on JSON-RPC 2.0
 - a local proxy that synchronises with an upstream server over WebSocket
+- native text clipboard integration for macOS via `pbcopy` and `pbpaste`
 - optional client-side end-to-end encryption using the [age](https://age-encryption.org/) format
 - simple CLI tools for `put/get/exec/keygen/register/status/topics/health`
 
@@ -69,6 +70,9 @@ See [docs/INSTALL.md](docs/INSTALL.md) for requirements, installed paths and
 `PATH`, Linux/macOS status and logs, safe update rules, reset/uninstall behavior,
 and the exact confirmation required before configuration or keys can be
 deleted.
+
+On a new macOS installation, the same per-user LaunchAgent synchronizes the
+native text clipboard with topic `c`; no additional package is required.
 
 ## Running
 
@@ -618,6 +622,9 @@ gracefully when Docker is not available or the test image has not been built.
 - `RCLIPBOARD_PROXY` / `RCLIPBOARD_UPSTREAM_ENDPOINT`
 - `RCLIPBOARD_XSEL` / `RCLIPBOARD_XSEL_PATH` / `RCLIPBOARD_XSEL_INTERVAL_MS`
 - `RCLIPBOARD_XSEL_ENCRYPT` — encrypt X11 clipboard via `rclipctl exec` (default: `0`)
+- `RCLIPBOARD_PASTEBOARD` — enable macOS text clipboard integration
+- `RCLIPBOARD_PBCOPY_PATH` / `RCLIPBOARD_PBPASTE_PATH` — native tool paths
+- `RCLIPBOARD_PASTEBOARD_INTERVAL_MS` — pasteboard poll interval (default: 250)
 - `RCLIPCTL_PATH` — path to `rclipctl` used by xsel encrypt mode
 - `RCLIPBOARD_ADMIN_TOKEN` — bearer token for `POST /v1/keys.publish`
 

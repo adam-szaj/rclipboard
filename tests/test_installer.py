@@ -527,8 +527,12 @@ class DocumentationContractTests(unittest.TestCase):
             "does not stash, rebase, reset, or switch branches",
             "`origin`",
             "checkout was updated but installation refresh failed",
-            "server service only",
-            "no native macOS clipboard synchronization",
+            "`/usr/bin/pbcopy`",
+            "`/usr/bin/pbpaste`",
+            "topic `c`",
+            "text-compatible pasteboard content only",
+            "enabled for a new macOS configuration",
+            "does not rewrite an existing `config.toml`",
             "xsel publisher remains Linux/X11-only",
             "required before claiming real launchd validation",
             "has not been run as part of the Linux automated test suite",
@@ -717,6 +721,7 @@ class HelperPortabilityTests(unittest.TestCase):
         )
         self.assertEqual(config["client"]["transport"], "uds")
         self.assertNotIn("fifo", config)
+        self.assertFalse(config["pasteboard"]["enabled"])
         self.assertIn(str(self.app_dir / "bin"), result.stdout)
         self.assertNotIn("~/.config/rclipboard", result.stdout)
 
@@ -756,6 +761,9 @@ class HelperPortabilityTests(unittest.TestCase):
         with (self.app_dir / "config.toml").open("rb") as file:
             config = tomllib.load(file)
         self.assertFalse(config["xsel"]["enabled"])
+        self.assertTrue(config["pasteboard"]["enabled"])
+        self.assertEqual(config["pasteboard"]["pbcopy_path"], "/usr/bin/pbcopy")
+        self.assertEqual(config["pasteboard"]["pbpaste_path"], "/usr/bin/pbpaste")
         self.assertIn("unavailable", result.stdout.lower())
 
 

@@ -43,6 +43,11 @@ XSEL_PATH="/usr/bin/xsel"
 XSEL_INTERVAL=250
 XSEL_ENCRYPT="false"
 
+PASTEBOARD_ENABLED="false"
+PBCOPY_PATH="/usr/bin/pbcopy"
+PBPASTE_PATH="/usr/bin/pbpaste"
+PASTEBOARD_INTERVAL=250
+
 AGE_KEY_FILE="$APP_DIR/age_key.txt"
 AGE_PUB_FILE="$APP_DIR/age_key.pub"
 
@@ -101,6 +106,8 @@ echo "  Endpoint: $SERVER_ENDPOINT"
 section "Step 2: X11 clipboard integration (xsel)"
 if [ "$PLATFORM" = "Darwin" ]; then
     echo "  xsel integration is unavailable on macOS."
+    echo "  Enabling native macOS clipboard integration (pbcopy/pbpaste)."
+    PASTEBOARD_ENABLED="true"
 else
     if command -v xsel >/dev/null 2>&1; then
         _xsel_default="y"
@@ -262,6 +269,12 @@ $_admin_line
     interval_ms = $XSEL_INTERVAL
     encrypt     = $XSEL_ENCRYPT
 
+[pasteboard]
+    enabled      = $PASTEBOARD_ENABLED
+    pbcopy_path  = "$PBCOPY_PATH"
+    pbpaste_path = "$PBPASTE_PATH"
+    interval_ms  = $PASTEBOARD_INTERVAL
+
 [proxy]
     enabled = $PROXY_ENABLED
 $_proxy_upstream_line
@@ -291,6 +304,7 @@ fi
 section "Setup complete"
 echo "  Transport:  $SERVER_ENDPOINT"
 echo "  xsel:       $XSEL_ENABLED"
+echo "  pasteboard: $PASTEBOARD_ENABLED"
 if [ -f "$AGE_PUB_FILE" ]; then
     echo "  Age key:    $AGE_KEY_FILE (public: $(cat "$AGE_PUB_FILE"))"
 else

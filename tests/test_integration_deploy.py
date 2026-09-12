@@ -588,7 +588,7 @@ class SetupWizardTests(unittest.TestCase):
         r = self._run_wizard("1\nn\nn\nn\nn\n")
         self.assertEqual(r.returncode, 0, r.stderr)
         data = tomllib.loads(self.config_toml.read_text())
-        for section in ["server", "xsel", "proxy", "ssl", "client"]:
+        for section in ["server", "xsel", "pasteboard", "proxy", "ssl", "client"]:
             with self.subTest(section=section):
                 self.assertIn(section, data)
 

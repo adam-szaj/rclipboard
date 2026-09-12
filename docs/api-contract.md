@@ -295,6 +295,8 @@ Result:
   "ok": true,
   "xsel_enabled": false,
   "xsel_good": false,
+  "pasteboard_enabled": false,
+  "pasteboard_good": false,
   "proxy_enabled": false,
   "proxy_good": false
 }
@@ -314,6 +316,15 @@ Result:
   ],
   "clients": ["WSServerConnection[ws://…]"],
   "xsel":  { "enabled": false, "good": false },
+  "pasteboard": {
+    "enabled": false,
+    "good": false,
+    "pbcopy_path": "/usr/bin/pbcopy",
+    "pbpaste_path": "/usr/bin/pbpaste",
+    "interval_ms": 250,
+    "topics": ["c"],
+    "last_error": null
+  },
   "proxy": {
     "enabled": true,
     "good": true,

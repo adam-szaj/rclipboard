@@ -10,7 +10,8 @@ service.
 - Git and a non-bare Git checkout of this repository
 - Bash
 - Linux: a working systemd user manager and `systemctl --user`
-- macOS: `launchd` and `launchctl`
+- macOS: `launchd`, `launchctl`, and the system-provided `/usr/bin/pbcopy`
+  and `/usr/bin/pbpaste`
 
 The source checkout must have an attached branch. Git is required after
 installation because updates are installed directly from that checkout.
@@ -123,9 +124,26 @@ After editing `config.toml`, restart a loaded job with:
 launchctl kickstart -k gui/$(id -u)/com.rclipboard.service
 ```
 
-The macOS installation provides the rclipboard server service only. It adds no
-native macOS clipboard synchronization; the xsel publisher remains
+The same LaunchAgent also synchronizes rclipboard topic `c` through
+`/usr/bin/pbcopy` and `/usr/bin/pbpaste`. The adapter handles text-compatible
+pasteboard content only. It is enabled for a new macOS configuration and needs
+no extra package. Rich text, images, file references, and other pasteboard
+types are outside this adapter's scope. The xsel publisher remains
 Linux/X11-only.
+
+Re-running installation does not rewrite an existing `config.toml`. To enable
+the adapter in an older installation, add or edit:
+
+```toml
+[pasteboard]
+enabled = true
+pbcopy_path = "/usr/bin/pbcopy"
+pbpaste_path = "/usr/bin/pbpaste"
+interval_ms = 250
+```
+
+Then restart the LaunchAgent and verify `pasteboard_enabled` and
+`pasteboard_good` with `rclipctl health`.
 
 ## Default UDS transport
 
@@ -267,17 +285,22 @@ validate plist structure and mocked `launchctl` commands.
 1. Install with `./scripts/install.sh` and confirm
    `launchctl print gui/$(id -u)/com.rclipboard.service` succeeds.
 2. Run `rclipctl health` and confirm it reaches the default UDS endpoint below
-   `${XDG_RUNTIME_DIR:-$HOME/.local/run}/rclipboard/uds.sock`.
-3. Restart with
+   `${XDG_RUNTIME_DIR:-$HOME/.local/run}/rclipboard/uds.sock`, with
+   `pasteboard_enabled` and `pasteboard_good` both true.
+3. Run `printf 'mac-local' | pbcopy`, wait one second, and confirm
+   `rclipctl get -c` returns `mac-local`. Then run
+   `printf 'rclipboard-remote' | rclipctl put -c`, wait one second, and confirm
+   `pbpaste` returns `rclipboard-remote`.
+4. Restart with
    `launchctl kickstart -k gui/$(id -u)/com.rclipboard.service`, then repeat the
    health check and inspect both files in `~/Library/Logs/rclipboard/`.
-4. Point a temporary named Git remote and branch at a controlled test commit,
+5. Point a temporary named Git remote and branch at a controlled test commit,
    then run `rclipboard-update --remote REMOTE --branch BRANCH`. Confirm the
    checkout fast-forwards, the service restarts, and `rclipctl health` succeeds.
-5. Run `./scripts/install.sh --reset`; confirm user configuration and keys are
+6. Run `./scripts/install.sh --reset`; confirm user configuration and keys are
    unchanged, the LaunchAgent is loaded, and health succeeds.
-6. Run `rclipboard-uninstall --purge-user-data`, type text other than lowercase
+7. Run `rclipboard-uninstall --purge-user-data`, type text other than lowercase
    `yes`, and confirm cancellation leaves the service and all listed files
    intact.
-7. Run `rclipboard-uninstall` without purge; confirm the LaunchAgent and managed
+8. Run `rclipboard-uninstall` without purge; confirm the LaunchAgent and managed
    runtime are removed while configuration and keys remain.

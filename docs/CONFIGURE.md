@@ -108,6 +108,27 @@ encrypt  = true             # capture via rclipctl exec --encrypt-output
 
 ---
 
+### macOS native clipboard integration (pbcopy/pbpaste)
+
+New macOS installations enable synchronization of text-compatible pasteboard
+content with topic `c`. The adapter uses the system tools and needs no extra
+dependency:
+
+```toml
+[pasteboard]
+enabled      = true
+pbcopy_path  = "/usr/bin/pbcopy"
+pbpaste_path = "/usr/bin/pbpaste"
+interval_ms  = 250
+```
+
+Existing configurations are preserved during reinstall and update. Add this
+section manually to opt an older installation in, then restart the LaunchAgent.
+Images, rich text, file references, and the X11 primary/secondary selections
+are not synchronized.
+
+---
+
 ### 4. HTTPS / TLS
 
 **Generate a self-signed certificate**
