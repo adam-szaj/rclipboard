@@ -218,9 +218,9 @@ case "$PLATFORM" in
 esac
 
 service_preflight || die "service preflight failed"
+validate_app_dir_for_cleanup
 
 if [ "$OPERATION" = reset ]; then
-    validate_app_dir_for_cleanup
     if [ "$PURGE_USER_DATA" -eq 1 ]; then
         confirm_user_data_purge
     fi

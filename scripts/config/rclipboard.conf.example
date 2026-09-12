@@ -2,11 +2,12 @@
 # Location: ~/.config/rclipboard/config.toml
 #
 # Environment variables (${VAR}) are expanded at runtime by the server and by
-# `rclipboard config env`.  The env file is regenerated automatically at each
-# service start via ExecStartPre into $XDG_RUNTIME_DIR/rclipboard/env (tmpfs).
-# To apply changes without restarting the service, run:
+# `rclipboard config env`. The shared service runner regenerates the private
+# env file at each service start below
+# ${XDG_RUNTIME_DIR:-$HOME/.local/run}/rclipboard/env. Restart after changes:
 #
 #   systemctl --user restart rclipboard.service
+#   launchctl kickstart -k gui/$(id -u)/com.rclipboard.service
 
 [server]
 # Bind endpoint.  Supported formats:

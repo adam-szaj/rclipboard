@@ -462,6 +462,16 @@ def _run_config_env(config: Path) -> str:
 
 
 class DocumentationContractTests(unittest.TestCase):
+    def test_config_template_describes_cross_platform_service_reload(self) -> None:
+        text = (ROOT_DIR / "scripts/config/rclipboard.conf.example").read_text()
+        self.assertIn("shared service runner", text)
+        self.assertIn("systemctl --user restart rclipboard.service", text)
+        self.assertIn(
+            "launchctl kickstart -k gui/$(id -u)/com.rclipboard.service",
+            text,
+        )
+        self.assertNotIn("ExecStartPre", text)
+
     def test_install_guide_has_required_sections_in_order(self) -> None:
         text = (ROOT_DIR / "docs/INSTALL.md").read_text()
         sections = (
@@ -1095,7 +1105,7 @@ class LaunchdAdapterTests(unittest.TestCase):
         result = _run_launchd_adapter(
             self.home,
             self.fake_bin,
-            print_status=1,
+            print_status=113,
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn(
@@ -1103,6 +1113,23 @@ class LaunchdAdapterTests(unittest.TestCase):
             result.stderr,
         )
         self.assertNotIn("bootstrap", self.launchctl_log.read_text())
+
+    def test_macos_unexpected_gui_probe_failure_is_an_error(self) -> None:
+        for action in ("start", "restart"):
+            with self.subTest(action=action):
+                self.launchctl_log.unlink(missing_ok=True)
+                result = _run_launchd_adapter(
+                    self.home,
+                    self.fake_bin,
+                    action=action,
+                    print_status=5,
+                )
+
+                self.assertNotEqual(result.returncode, 0, result.stderr)
+                self.assertNotIn("graphical login", result.stderr)
+                log = self.launchctl_log.read_text()
+                self.assertNotIn("bootstrap", log)
+                self.assertNotIn("kickstart", log)
 
     def test_macos_bootstrap_failure_in_gui_domain_is_an_error(self) -> None:
         result = _run_launchd_adapter(
@@ -1371,6 +1398,42 @@ class UnifiedInstallTests(unittest.TestCase):
 
     def tearDown(self) -> None:
         self._tmp.cleanup()
+
+    def test_install_rejects_symlinked_managed_paths_before_mutation(self) -> None:
+        for kind in ("app", "bin", "installer"):
+            with self.subTest(kind=kind):
+                case_root = self.tmp_path / f"install-symlink-{kind}"
+                home = case_root / "home"
+                fake_bin = case_root / "fake-bin"
+                home.mkdir(parents=True)
+                fake_bin.mkdir()
+                _make_fake_systemctl(fake_bin)
+                _make_fake_launchctl(fake_bin)
+                _make_fake_python(fake_bin)
+                app_dir = home / ".config/rclipboard"
+                app_dir.parent.mkdir(parents=True)
+                external = case_root / "external"
+                external.mkdir(mode=0o755)
+                marker = external / "keep.txt"
+                marker.write_bytes(b"external\n")
+
+                if kind == "app":
+                    app_dir.symlink_to(external, target_is_directory=True)
+                else:
+                    app_dir.mkdir()
+                    (app_dir / kind).symlink_to(external, target_is_directory=True)
+
+                result = _run_installer(
+                    home,
+                    fake_bin,
+                    args=["--no-start"],
+                )
+
+                self.assertNotEqual(result.returncode, 0, result.stderr)
+                self.assertIn("unsafe", result.stderr)
+                self.assertEqual(marker.read_bytes(), b"external\n")
+                self.assertEqual(stat.S_IMODE(external.stat().st_mode), 0o755)
+                self.assertEqual(list(external.iterdir()), [marker])
 
     def test_only_public_scripts_are_installed(self) -> None:
         installed = {p.name for p in self.bin_dir.iterdir() if p.is_file()}
