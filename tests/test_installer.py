@@ -574,6 +574,10 @@ class InstallerConfigTests(unittest.TestCase):
         self.assertEqual(data["client"]["transport"], "uds")
         self.assertFalse(data["proxy"]["enabled"])
         self.assertFalse(data["xsel"]["enabled"])
+        self.assertFalse(data["pasteboard"]["enabled"])
+        self.assertEqual(data["pasteboard"]["pbcopy_path"], "/usr/bin/pbcopy")
+        self.assertEqual(data["pasteboard"]["pbpaste_path"], "/usr/bin/pbpaste")
+        self.assertEqual(data["pasteboard"]["interval_ms"], 250)
 
 
 class HelperPortabilityTests(unittest.TestCase):
@@ -1556,6 +1560,41 @@ class UnifiedInstallTests(unittest.TestCase):
         )
         self.assertFalse((home / ".config/systemd/user").exists())
 
+    def test_new_darwin_config_enables_native_pasteboard(self) -> None:
+        home = self.tmp_path / "darwin-pasteboard-home"
+        home.mkdir()
+
+        result = _run_installer(
+            home,
+            self.fake_bin,
+            platform="Darwin",
+            args=["--no-start"],
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        with (home / ".config/rclipboard/config.toml").open("rb") as file:
+            config = tomllib.load(file)
+        self.assertTrue(config["pasteboard"]["enabled"])
+
+    def test_darwin_install_preserves_existing_pasteboard_choice(self) -> None:
+        home = self.tmp_path / "darwin-existing-pasteboard-home"
+        config_path = home / ".config/rclipboard/config.toml"
+        config_path.parent.mkdir(parents=True)
+        config_path.write_text("[pasteboard]\nenabled = false\n")
+
+        result = _run_installer(
+            home,
+            self.fake_bin,
+            platform="Darwin",
+            args=["--no-start"],
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            config_path.read_text(),
+            "[pasteboard]\nenabled = false\n",
+        )
+
     def test_custom_xdg_config_home_is_used(self) -> None:
         home = self.tmp_path / "xdg-home"
         xdg_config = self.tmp_path / "xdg-config"
@@ -1580,6 +1619,7 @@ class UnifiedInstallTests(unittest.TestCase):
             "uds://${XDG_RUNTIME_DIR}/rclipboard/uds.sock",
         )
         self.assertEqual(config["client"]["transport"], "uds")
+        self.assertFalse(config["pasteboard"]["enabled"])
         self.assertEqual(
             stat.S_IMODE((self.app_dir / "config.toml").stat().st_mode),
             0o600,

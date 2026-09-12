@@ -54,6 +54,14 @@
     # ${XDG_RUNTIME_DIR}/rclipboard/display.env
     display_env_file = "${XDG_RUNTIME_DIR}/rclipboard/display.env"
 
+# Native macOS text clipboard integration via pbcopy/pbpaste.
+# New macOS installations enable this section automatically.
+[pasteboard]
+    enabled      = false
+    pbcopy_path  = "/usr/bin/pbcopy"
+    pbpaste_path = "/usr/bin/pbpaste"
+    interval_ms  = 250
+
 [proxy]
     # Enable proxy mode: connect to an upstream server and replicate topics locally.
     enabled = false

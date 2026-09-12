@@ -274,6 +274,21 @@ for old, new in replacements.items():
 path.write_text(text)
 PY
     fi
+    if [ "$PLATFORM" = Darwin ]; then
+        "$PYTHON_BIN" - "$config_temporary" <<'PY' \
+            || die "failed to enable macOS pasteboard integration"
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+text = path.read_text()
+old = '[pasteboard]\n    enabled      = false'
+new = '[pasteboard]\n    enabled      = true'
+if text.count(old) != 1:
+    raise SystemExit(f"configuration template mismatch: {old}")
+path.write_text(text.replace(old, new))
+PY
+    fi
     chmod 0600 "$config_temporary"
     mv -f "$config_temporary" "$CONFIG_FILE"
     printf 'Created %s (edit as needed).\n' "$CONFIG_FILE"
