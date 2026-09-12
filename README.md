@@ -74,6 +74,45 @@ deleted.
 On a new macOS installation, the same per-user LaunchAgent synchronizes the
 native text clipboard with topic `c`; no additional package is required.
 
+### Native macOS clipboard
+
+The macOS adapter polls the system pasteboard with `/usr/bin/pbpaste` and
+writes remote topic `c` updates with `/usr/bin/pbcopy`. It handles
+text-compatible content only; images, rich text, file references, and X11
+primary/secondary selections are not synchronized. A 250 ms poll interval and
+the last seen/applied value prevent a remote update from being published back
+as a new local change.
+
+New macOS installations enable the adapter automatically. Reinstall and update
+do not rewrite an existing `config.toml`; older installations can opt in with:
+
+```toml
+[pasteboard]
+enabled      = true
+pbcopy_path  = "/usr/bin/pbcopy"
+pbpaste_path = "/usr/bin/pbpaste"
+interval_ms  = 250
+```
+
+Restart the LaunchAgent after changing the configuration:
+
+```bash
+launchctl kickstart -k gui/$(id -u)/com.rclipboard.service
+rclipctl health  # pasteboard_enabled=true, pasteboard_good=true
+```
+
+For a manual round-trip check:
+
+```bash
+printf 'from macOS' | pbcopy
+sleep 1
+rclipctl get -c
+
+printf 'from rclipboard' | rclipctl put -c
+sleep 1
+pbpaste
+```
+
 ## Running
 
 The user service installed above uses the private UDS configuration by default.
@@ -575,6 +614,7 @@ Most important targets:
 - `make test-http`
 - `make test-ws`
 - `make test-proxy-integration`
+- `make test-platform-clipboard` — xsel on Linux, native pasteboard on macOS
 - `make docker-build-tunel-test` — build the SSH test image (required once before `test-tunel`)
 - `make test-tunel` — SSH tunnel smoke tests (requires Docker)
 
@@ -588,6 +628,10 @@ Automated tests live in `tests/`:
 - `test_functional_https.py` / `test_functional_wss.py` — TLS variants
 - `test_integration_proxy.py` / `test_integration_proxy_ssl.py` — proxy integration
 - `test_integration_tunel.py` — SSH tunnel smoke tests (require Docker)
+- `test_xsel_display_env.py` — Linux/X11 clipboard integration
+- `test_pasteboard.py` — portable macOS adapter and lifecycle tests
+- `test_pasteboard_macos.py` — native `/usr/bin/pbcopy` and
+  `/usr/bin/pbpaste` round trips on macOS
 
 Run all tests:
 
@@ -611,6 +655,12 @@ make test-tunel
 The tunnel tests start a Docker container with `openssh-server` and verify all four
 socket-type combinations (`tcp→tcp`, `uds→tcp`, `tcp→uds`, `uds→uds`).  They skip
 gracefully when Docker is not available or the test image has not been built.
+
+The [platform clipboard workflow](.github/workflows/platform-clipboard.yml)
+runs the same `make test-platform-clipboard` target on Linux and macOS. Linux
+runs the `xsel` suite. macOS replaces it with the portable pasteboard suite and
+native tests that use the real user pasteboard, verify Unicode in both
+directions, suppress write-back echo, and restore the previous text content.
 
 ## Environment Configuration
 
