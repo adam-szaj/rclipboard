@@ -8,6 +8,11 @@ set -euo pipefail
 
 REPO=/home/tester/rclipboard
 
+# PID 1 applies its device policy before this script runs and leaves /dev/tty
+# inaccessible to the unprivileged test user. Purge tests intentionally open
+# the controlling terminal through this device rather than accepting stdin.
+chmod 0666 /dev/tty
+
 echo "── 1/3 layout test suite ──"
 su - tester -c "cd $REPO && PYTHONPATH=$REPO/src:$REPO /home/tester/venv/bin/python -m unittest tests.test_installer -v"
 

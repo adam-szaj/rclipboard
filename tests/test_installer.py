@@ -1337,6 +1337,10 @@ class InstallerBuildEntryPointTests(unittest.TestCase):
 
     def test_real_systemd_harness_uses_unified_autostart_and_lifecycle_commands(self) -> None:
         source = (ROOT_DIR / "docker/test-install/systemd-test.sh").read_text()
+        self.assertLess(
+            source.index("chmod 0666 /dev/tty"),
+            source.index("su - tester -c"),
+        )
         self.assertIn("scripts/install.sh", source)
         self.assertNotIn("install-systemd-user.sh", source)
         self.assertNotIn("systemctl --user start rclipboard.service", source)
