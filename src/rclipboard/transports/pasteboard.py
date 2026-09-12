@@ -25,22 +25,43 @@ logger: Logger = get_logger(__name__)
 info = logger.info
 debug = logger.debug
 
-PBCOPY_PATH = Path(os.environ.get("RCLIPBOARD_PBCOPY_PATH", "/usr/bin/pbcopy"))
-PBPASTE_PATH = Path(
-    os.environ.get("RCLIPBOARD_PBPASTE_PATH", "/usr/bin/pbpaste")
-)
-PASTEBOARD_ENABLED = env_bool("RCLIPBOARD_PASTEBOARD")
-POLL_INTERVAL_MS = int(
-    os.environ.get("RCLIPBOARD_PASTEBOARD_INTERVAL_MS", "250")
-)
+DEFAULT_PBCOPY_PATH = Path("/usr/bin/pbcopy")
+DEFAULT_PBPASTE_PATH = Path("/usr/bin/pbpaste")
+DEFAULT_POLL_INTERVAL_MS = 250
 TOPIC = "c"
 
 
-def tools_available() -> bool:
+def _configured_pbcopy_path() -> Path:
+    return Path(
+        os.environ.get("RCLIPBOARD_PBCOPY_PATH", str(DEFAULT_PBCOPY_PATH))
+    )
+
+
+def _configured_pbpaste_path() -> Path:
+    return Path(
+        os.environ.get("RCLIPBOARD_PBPASTE_PATH", str(DEFAULT_PBPASTE_PATH))
+    )
+
+
+def _configured_interval_ms() -> int:
+    return int(
+        os.environ.get(
+            "RCLIPBOARD_PASTEBOARD_INTERVAL_MS",
+            str(DEFAULT_POLL_INTERVAL_MS),
+        )
+    )
+
+
+def tools_available(
+    pbcopy_path: Path | None = None,
+    pbpaste_path: Path | None = None,
+) -> bool:
+    pbcopy_path = pbcopy_path or _configured_pbcopy_path()
+    pbpaste_path = pbpaste_path or _configured_pbpaste_path()
     return (
         sys.platform == "darwin"
-        and os.access(PBCOPY_PATH, os.X_OK)
-        and os.access(PBPASTE_PATH, os.X_OK)
+        and os.access(pbcopy_path, os.X_OK)
+        and os.access(pbpaste_path, os.X_OK)
     )
 
 
@@ -50,11 +71,15 @@ async def _exec(
     input_data: bytes | None = None,
     timeout: float = 5.0,
 ) -> tuple[int, bytes, bytes]:
+    command_env = os.environ.copy()
+    if not command_env.get("LC_ALL") and not command_env.get("LC_CTYPE"):
+        command_env["LC_CTYPE"] = "UTF-8"
     proc = await a.create_subprocess_exec(
         executable,
         stdin=a.subprocess.PIPE if input_data is not None else None,
         stdout=a.subprocess.PIPE,
         stderr=a.subprocess.PIPE,
+        env=command_env,
     )
     try:
         stdout, stderr = await a.wait_for(
@@ -106,7 +131,12 @@ class PasteboardInterface(BidirectionalInterface):
     def __init__(self, app: FastAPI):
         super().__init__()
         self.app = app
-        self.enabled = PASTEBOARD_ENABLED and tools_available()
+        self.pbcopy_path = _configured_pbcopy_path()
+        self.pbpaste_path = _configured_pbpaste_path()
+        self.interval_ms = _configured_interval_ms()
+        self.enabled = env_bool("RCLIPBOARD_PASTEBOARD") and tools_available(
+            self.pbcopy_path, self.pbpaste_path
+        )
         self.state = PasteboardState()
         self.last_error: str | None = None
         self._lock = a.Lock()
@@ -132,9 +162,9 @@ class PasteboardInterface(BidirectionalInterface):
         return {
             "enabled": self.enabled,
             "good": self.good,
-            "pbcopy_path": str(PBCOPY_PATH),
-            "pbpaste_path": str(PBPASTE_PATH),
-            "interval_ms": POLL_INTERVAL_MS,
+            "pbcopy_path": str(self.pbcopy_path),
+            "pbpaste_path": str(self.pbpaste_path),
+            "interval_ms": self.interval_ms,
             "topics": [TOPIC],
             "last_error": self.last_error,
         }
@@ -142,7 +172,7 @@ class PasteboardInterface(BidirectionalInterface):
     async def read_item(self) -> None:
         async with self._lock:
             self.state.poll_ts = utc_timestamp()
-            code, current, stderr = await _exec(PBPASTE_PATH, timeout=1)
+            code, current, stderr = await _exec(self.pbpaste_path, timeout=1)
             if code != 0:
                 self.last_error = _error_message("pbpaste", code, stderr)
                 return
@@ -175,7 +205,7 @@ class PasteboardInterface(BidirectionalInterface):
         data_bytes = _item_bytes(data)
         async with self._lock:
             code, _, stderr = await _exec(
-                PBCOPY_PATH, input_data=data_bytes, timeout=2.5
+                self.pbcopy_path, input_data=data_bytes, timeout=2.5
             )
             if code != 0:
                 self.last_error = _error_message("pbcopy", code, stderr)
@@ -188,7 +218,7 @@ class PasteboardInterface(BidirectionalInterface):
             self.state.seen_ts = timestamp
 
     async def poller(self) -> None:
-        interval = POLL_INTERVAL_MS / 1000.0
+        interval = self.interval_ms / 1000.0
         while True:
             try:
                 await a.sleep(interval)
@@ -213,7 +243,7 @@ class PasteboardInterface(BidirectionalInterface):
 
 def install_pasteboard(app: FastAPI) -> None:
     app.state.pasteboard = None
-    if not PASTEBOARD_ENABLED:
+    if not env_bool("RCLIPBOARD_PASTEBOARD"):
         return
     conn = PasteboardInterface(app)
     app.state.pasteboard = conn
@@ -236,9 +266,9 @@ def get_pasteboard_status(app: FastAPI) -> dict[str, JsonValue]:
     return {
         "enabled": False,
         "good": False,
-        "pbcopy_path": str(PBCOPY_PATH),
-        "pbpaste_path": str(PBPASTE_PATH),
-        "interval_ms": POLL_INTERVAL_MS,
+        "pbcopy_path": str(_configured_pbcopy_path()),
+        "pbpaste_path": str(_configured_pbpaste_path()),
+        "interval_ms": _configured_interval_ms(),
         "topics": [TOPIC],
         "last_error": None,
     }

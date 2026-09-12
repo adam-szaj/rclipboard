@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import tempfile
 import unittest
 from base64 import b64encode
@@ -61,10 +62,37 @@ class PasteboardAvailabilityTests(unittest.TestCase):
 class PasteboardInterfaceTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
         self.app = FastAPI()
-        enabled = mock.patch.object(pasteboard, "PASTEBOARD_ENABLED", False)
+        enabled = mock.patch.dict(
+            os.environ, {"RCLIPBOARD_PASTEBOARD": "0"}
+        )
         enabled.start()
         self.addCleanup(enabled.stop)
         self.conn = pasteboard.PasteboardInterface(self.app)
+
+    def test_paths_are_read_when_adapter_is_created(self) -> None:
+        with mock.patch.dict(
+            os.environ,
+            {
+                "RCLIPBOARD_PBCOPY_PATH": "/late/pbcopy",
+                "RCLIPBOARD_PBPASTE_PATH": "/late/pbpaste",
+            },
+        ):
+            conn = pasteboard.PasteboardInterface(self.app)
+
+        self.assertEqual(conn.pbcopy_path, Path("/late/pbcopy"))
+        self.assertEqual(conn.pbpaste_path, Path("/late/pbpaste"))
+
+    async def test_enablement_is_read_when_adapter_is_created(self) -> None:
+        with (
+            mock.patch.dict(os.environ, {"RCLIPBOARD_PASTEBOARD": "1"}),
+            mock.patch.object(pasteboard.sys, "platform", "darwin"),
+            mock.patch.object(pasteboard.os, "access", return_value=True),
+        ):
+            conn = pasteboard.PasteboardInterface(self.app)
+
+        self.assertTrue(conn.enabled)
+        self.assertTrue(conn.good)
+        await conn.shutdown()
 
     async def test_local_change_is_enqueued_as_clipboard_topic(self) -> None:
         with (
@@ -109,7 +137,7 @@ class PasteboardInterfaceTests(unittest.IsolatedAsyncioTestCase):
             await self.conn.send(item)
 
         execute.assert_awaited_once_with(
-            pasteboard.PBCOPY_PATH,
+            self.conn.pbcopy_path,
             input_data=b"remote value",
             timeout=2.5,
         )
@@ -195,10 +223,13 @@ class PasteboardInterfaceTests(unittest.IsolatedAsyncioTestCase):
         process.communicate = communicate
         process.wait = mock.AsyncMock(return_value=0)
 
-        with mock.patch.object(
-            pasteboard.a,
-            "create_subprocess_exec",
-            new=mock.AsyncMock(return_value=process),
+        with (
+            mock.patch.dict(os.environ, {}, clear=True),
+            mock.patch.object(
+                pasteboard.a,
+                "create_subprocess_exec",
+                new=mock.AsyncMock(return_value=process),
+            ) as create_process,
         ):
             result = await pasteboard._exec(
                 Path("/usr/bin/pbpaste"), timeout=0.001
@@ -206,6 +237,8 @@ class PasteboardInterfaceTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result, (124, b"", b"timeout"))
         process.terminate.assert_called_once_with()
+        command_env = create_process.await_args.kwargs["env"]
+        self.assertEqual(command_env["LC_CTYPE"], "UTF-8")
 
 
 class PasteboardLifecycleTests(unittest.IsolatedAsyncioTestCase):
@@ -215,7 +248,7 @@ class PasteboardLifecycleTests(unittest.IsolatedAsyncioTestCase):
     def test_install_registers_and_subscribes_enabled_adapter(self) -> None:
         conn = mock.Mock(enabled=True)
         with (
-            mock.patch.object(pasteboard, "PASTEBOARD_ENABLED", True),
+            mock.patch.dict(os.environ, {"RCLIPBOARD_PASTEBOARD": "1"}),
             mock.patch.object(
                 pasteboard, "PasteboardInterface", return_value=conn
             ),
@@ -230,7 +263,7 @@ class PasteboardLifecycleTests(unittest.IsolatedAsyncioTestCase):
 
     def test_install_skips_adapter_when_not_configured(self) -> None:
         with (
-            mock.patch.object(pasteboard, "PASTEBOARD_ENABLED", False),
+            mock.patch.dict(os.environ, {"RCLIPBOARD_PASTEBOARD": "0"}),
             mock.patch.object(pasteboard, "PasteboardInterface") as adapter,
         ):
             pasteboard.install_pasteboard(self.app)
@@ -255,8 +288,8 @@ class PasteboardLifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(status["enabled"])
         self.assertFalse(status["good"])
         self.assertEqual(status["topics"], ["c"])
-        self.assertEqual(status["pbcopy_path"], str(pasteboard.PBCOPY_PATH))
-        self.assertEqual(status["pbpaste_path"], str(pasteboard.PBPASTE_PATH))
+        self.assertEqual(status["pbcopy_path"], "/usr/bin/pbcopy")
+        self.assertEqual(status["pbpaste_path"], "/usr/bin/pbpaste")
 
 
 if __name__ == "__main__":
