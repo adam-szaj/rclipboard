@@ -23,7 +23,7 @@ IMAGE ?= rclipboard:latest
 TUNEL_TEST_IMAGE ?= rcliptunel-test:latest
 DEPLOY_TEST_IMAGE ?= rclipboard-deploy-test:latest
 
-.PHONY: help install run run-dev run-uds run-https run-proxy run-dev-proxy cert cert-san health status topics docker-build docker-run docker-run-proxy docker-build-tunel-test plugin-install plugin-uninstall plugin-reload plugin-demo smoke proxy-smoke test test-functional test-integration test-http test-ws test-proxy-integration test-tunel test-https test-wss test-ssl-proxy-integration test-ssl test-soak test-soak-full test-install-docker test-install-docker-systemd service-install service-update service-reset service-uninstall systemd-user-install systemd-user-enable systemd-user-disable nvim-plugin-install nvim-plugin-pack install-no-systemd setup-wizard deploy deploy-dry docker-build-deploy-test test-deploy
+.PHONY: help install run run-dev run-uds run-https run-proxy run-dev-proxy cert cert-san health status topics docker-build docker-run docker-run-proxy docker-build-tunel-test plugin-install plugin-uninstall plugin-reload plugin-demo smoke proxy-smoke test test-platform-clipboard test-functional test-integration test-http test-ws test-proxy-integration test-tunel test-https test-wss test-ssl-proxy-integration test-ssl test-soak test-soak-full test-install-docker test-install-docker-systemd service-install service-update service-reset service-uninstall systemd-user-install systemd-user-enable systemd-user-disable nvim-plugin-install nvim-plugin-pack install-no-systemd setup-wizard deploy deploy-dry docker-build-deploy-test test-deploy
 
 help:
 	@echo "Targets:"
@@ -52,6 +52,7 @@ help:
 	@echo "  smoke         - quick HTTP smoke test (health/clip/fetch)"
 	@echo "  proxy-smoke   - start upstream+proxy servers and verify replication both ways"
 	@echo "  test          - run all automated tests"
+	@echo "  test-platform-clipboard - run xsel tests on Linux or native pasteboard tests on macOS"
 	@echo "  test-tunel    - SSH tunnel smoke tests (requires docker-build-tunel-test)"
 	@echo "  test-functional - run functional HTTP/WS tests"
 	@echo "  test-integration - run integration tests"
@@ -227,6 +228,13 @@ proxy-smoke:
 	PYTHONPATH=src .venv/bin/python -m tests.run_proxy_smoke
 
 test: test-functional test-integration test-ssl
+
+test-platform-clipboard:
+	@case "$$(uname -s)" in \
+		Darwin) PYTHONPATH=src .venv/bin/python -m unittest tests.test_pasteboard tests.test_pasteboard_macos -v ;; \
+		Linux)  PYTHONPATH=src .venv/bin/python -m unittest tests.test_xsel_display_env -v ;; \
+		*) echo "unsupported platform for clipboard integration tests" >&2; exit 2 ;; \
+	esac
 
 # Soak tests (excluded from default `make test` — run explicitly)
 # Quick pass (30 s per class):  make test-soak

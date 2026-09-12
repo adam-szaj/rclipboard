@@ -601,6 +601,7 @@ Or run them individually:
 make test-http
 make test-ws
 make test-proxy-integration
+make test-platform-clipboard  # xsel on Linux, native pbcopy/pbpaste on macOS
 
 # SSH tunnel tests — build the test image first:
 make docker-build-tunel-test

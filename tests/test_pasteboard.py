@@ -14,6 +14,8 @@ from rclipboard.config import load_config
 from rclipboard.models.wire import TopicData, ValueData
 from rclipboard.transports import pasteboard
 
+ROOT_DIR = Path(__file__).resolve().parents[1]
+
 
 class PasteboardConfigTests(unittest.TestCase):
     def test_config_maps_pasteboard_fields_to_environment(self) -> None:
@@ -57,6 +59,25 @@ class PasteboardAvailabilityTests(unittest.TestCase):
             mock.patch.object(pasteboard.os, "access", return_value=False),
         ):
             self.assertFalse(pasteboard.tools_available())
+
+
+class PlatformClipboardCIContractTests(unittest.TestCase):
+    def test_ci_runs_platform_specific_clipboard_target_on_macos(self) -> None:
+        workflow = (
+            ROOT_DIR / ".github/workflows/platform-clipboard.yml"
+        ).read_text()
+        makefile = (ROOT_DIR / "Makefile").read_text()
+
+        self.assertIn("macos-latest", workflow)
+        self.assertIn("make test-platform-clipboard", workflow)
+        self.assertRegex(
+            makefile,
+            r"Darwin\).*tests\.test_pasteboard_macos",
+        )
+        self.assertRegex(
+            makefile,
+            r"Linux\).*tests\.test_xsel_display_env",
+        )
 
 
 class PasteboardInterfaceTests(unittest.IsolatedAsyncioTestCase):
